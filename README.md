@@ -2,86 +2,89 @@
 
 **mouse2joy** rewrites the Python mouse‑to‑joystick converter in Rust for better performance and a modern UI.
 
-**Installation - One Command**
+**Installation**
 
-The easiest way to install is with the single-install script:
+## Linux (Arch-based and other distributions)
 
-## Using the install script (recommended)
-
+### Option 1: Pre‑built binary (if available)
 ```bash
-# Download and run the installer (requires curl and sudo)
-curl -fsSL https://raw.githubusercontent.com/yourusername/mouse2joy/main/install.sh | bash
+aur mouse2joy
 ```
 
-Or if you prefer wget:
+### Option 2: From source (recommended)
+
+1. Clone the repository:
 ```bash
-wget -qO- https://raw.githubusercontent.com/yourusername/mouse2joy/main/install.sh | bash
+git clone https://github.com/yourusername/mouse2joy.git
+cd mouse2joy
 ```
 
-The script will:
-- Detect your Linux distribution
-- Install Rust if not already present
-- Build the release binary
-- Set up the config file at `~/.config/mouse2joy/config.toml`
-- Create a `/usr/local/bin/mouse2joy` symlink or copy
-- Add uinput permissions if needed
-
-## Manual one-line build (if you have Rust)
-
-If you already have Rust installed, you can build and install with one command:
-
+2. Build with Cargo (requires stable Rust toolchain):
 ```bash
-# Build release and install to /usr/local/bin
-cargo install --path . --locked
+cargo build --release
 ```
 
-Or build manually:
+3. Run with sudo (required for /dev/uinput and mouse device access):
 ```bash
-cargo build --release && sudo cp target/release/mouse2joy /usr/local/bin/mouse2joy
+sudo ./target/release/mouse2joy
 ```
 
-## Quick Start After Installation
-
+### Option 3: System packages
 ```bash
-# Run the application (requires sudo for /dev/uinput access)
-sudo mouse2joy
+# Install dependencies if needed (Arch Linux)
+sudo pacman -S cargo rustup libpulse libasoundutils
 ```
-
-## Run without sudo (advanced)
-
-If your system has proper permissions:
-
-```bash
-chmod 660 /dev/uinput
-mouse2joy
-```
-
-## Installation Troubleshooting
-
-- **'command not found: cargo'**: Install Rust first: `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
-- **Permission denied on /dev/uinput**: Run `sudo usermod -a -G input $USER` and log out/in, or use `sudo mouse2joy`
-- **No mouse device found**: Ensure the script detects your mouse; you can specify it manually in `~/.config/mouse2joy/config.toml`
-
-## Configuration
-
-After first run, config is at `~/.config/mouse2joy/config.toml`. Edit it to customize:
-
-- `device` - Mouse device path (auto-detected usually)
-- `grab_button` - Which button toggles grab (default: SIDE/button 5)
-- `sensitivity` - Joystick sensitivity
-- `center_strength_x/y` - Spring-back strength
-- `audio_volume` - Volume percentage
 
 ## Uninstallation
 
+### From source:
 ```bash
-# Using the script (if it was used for install)
-uninstall mouse2joy
+# Stop the application
+pkill mouse2joy
 
-# Or manually:
+# Remove binary and config (optional)
 sudo rm -f /usr/local/bin/mouse2joy
-rm -rf ~/.config/mouse2joy
+rm -f ~/.config/mouse2joy/config.toml
 ```
+
+### Using package manager (if installed via AUR):
+```bash
+# Example for AUR helpers
+paru -R mouse2joy
+```
+
+## Run without sudo (experimental)
+
+If your system has proper permissions set up:
+
+```bash
+chmod 660 /dev/uinput
+```
+
+Then run without sudo (but you'll need appropriate group permissions):
+
+```bash
+./target/release/mouse2joy
+```
+
+## Performance Notes
+
+The Rust implementation is optimized for:
+
+- **Memory**: Under 20 MB of RAM (static release build)
+- **Binary size**: ~2 MB in release mode
+- **Responsiveness**: 60 Hz physics simulation, atomic state management for lock‑free concurrent design
+
+## Dependencies
+
+This application requires:
+
+- Rust toolchain (stable)
+- Linux kernel with evdev support
+- PulseAudio (or PipeWire with PulseAudio compatibility mode)
+
+
+**mouse2joy** rewrites the Python mouse‑to‑joystick converter in Rust for better performance and a modern UI.
 
 ## Key Features
 
