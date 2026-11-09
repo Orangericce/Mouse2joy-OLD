@@ -6,27 +6,22 @@ use evdev::uinput::VirtualDevice;
 use crossterm::event::{Event, KeyCode, KeyEvent};
 use crossterm::execute;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
+use crossterm::style::Color;
 use ratatui::backend::CrosstermBackend;
-use ratatui::widgets::{Block, Borders, Gauge, Paragraph, Widget};
+use ratatui::layout::{Constraint, Direction, Layout, Margin};
+use ratatui::style::{Modifier, Style as TuiStyle};
+use ratatui::widgets::{Block, Borders, Gauge, Paragraph, Widget, Fill, List, ListItem};
 use ratatui::Terminal;
-use std::io::stdout;
-use gtk4::prelude::*;
-use gtk4::{
-    Align, Application, ApplicationWindow, Box as GtkBox, Button, CheckButton, Label, LevelBar,
-    Orientation, Scale,
-};
-use libpulse_binding::sample::{Format, Spec};
-use libpulse_binding::stream::Direction;
-use libpulse_simple_binding::Simple;
-use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
-use std::thread;
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
+use serde::{Deserialize, Serialize};
 
 const AXIS_MIN: i32 = -32767;
 const AXIS_MAX: i32 = 32767;
