@@ -84,7 +84,7 @@ All values are updated via channels and displayed by the Ratatui terminal render
 
 ## Performance
 
-- **60 Hz Centering Loop** – Dedicated thread runs at 60 Hz, using `AtomicF32` fields for X/Y to avoid mutexes.
+- **60 Hz Centering Loop** – Dedicated thread runs at 60 Hz, using atomic fields for X/Y to avoid mutexes.
 - **Lock‑Free State** – All state (`x`, `y`, `grabbed`, etc.) is managed via `std::sync::atomic` primitives, ensuring no data races and minimal contention.
 - **Streamlined I/O** – `evdev` reads raw events directly (no polling) and only buffers them while grabbed.
 - **Low Memory Footprint** – All buffers are small; the whole program stays well under 20 MB even with the Ratatui runtime.

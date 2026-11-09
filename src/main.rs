@@ -1,18 +1,9 @@
-use evdev::{
-    AbsInfo, AbsoluteAxisCode, AttributeSet, Device, EventSummary, InputEvent, KeyCode,
-    RelativeAxisCode, UinputAbsSetup,
-};
+use evdev::{AbsoluteAxisCode, Device, KeyCode, UinputAbsSetup};
 use evdev::uinput::VirtualDevice;
-use crossterm::event::{Event, KeyCode as CrosstermKeyCode, KeyEvent};
-use crossterm::execute;
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
-use crossterm::style::Color;
-use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout, Margin};
 use ratatui::style::{Modifier, Style as TuiStyle};
-use ratatui::widgets::{Block, Borders, Gauge, Paragraph, Widget, List, ListItem};
+use ratatui::widgets::{Block, Borders, Paragraph, List, ListItem};
 use ratatui::Terminal;
-use std::borrow::Cow;
 use std::cell::RefCell;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -28,7 +19,6 @@ use std::ops::ControlFlow;
 const AXIS_MIN: i32 = -32767;
 const AXIS_MAX: i32 = 32767;
 const CENTER_TICK_HZ: u64 = 60;
-const APP_ID: &str = "dev.local.mouse2joy";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -168,7 +158,6 @@ struct SharedState {
     center_y_fp: AtomicU32,
     center_while_grabbed: AtomicBool,
     volume_fp: AtomicU32,
-    show_window: AtomicBool,
     quit_requested: AtomicBool,
 }
 
@@ -184,15 +173,13 @@ impl SharedState {
             center_y_fp: AtomicU32::new((cfg.center_strength_y as f32).to_bits()),
             center_while_grabbed: AtomicBool::new(cfg.center_while_grabbed),
             volume_fp: AtomicU32::new((cfg.audio_volume as f32).to_bits()),
-            show_window: AtomicBool::new(true),
             quit_requested: AtomicBool::new(false),
         }
     }
-    fn f32_load(a: &AtomicU32) -> f32 { f32::from_bits(a.load(std::sync::atomic::Ordering::Relaxed)) }
-    fn f32_store(a: &AtomicU32, v: f32) { a.store(v.to_bits(), std::sync::atomic::Ordering::Relaxed) }
-}
 
-fn clamp_i32(v: i32, lo: i32, hi: i32) -> i32 { v.max(lo).min(hi) }
+    fn f32_load(a: &AtomicU32) -> f32 { f32::from_bits(a.load(Ordering::Relaxed)) }
+    fn f32_store(a: &AtomicU32, v: f32) { a.store(v.to_bits(), Ordering::Relaxed) }
+}
 
 fn create_uinput() -> Result<Mutex<VirtualDevice>, Box<dyn std::error::Error>> {
     let abs_x = UinputAbsSetup::new(
@@ -208,21 +195,20 @@ fn create_uinput() -> Result<Mutex<VirtualDevice>, Box<dyn std::error::Error>> {
     keys.insert(KeyCode::BTN_THUMB);
     keys.insert(KeyCode::BTN_THUMB2);
 
-    let mut dev = VirtualDevice::builder()?;
-    dev = dev.name("mouse2joy Virtual Joystick")?;
-    dev = dev.with_absolute_axis(&abs_x)?;
-    dev = dev.with_absolute_axis(&abs_y)?;
-    dev = dev.with_keys(&keys)?;
-    let dev = dev.build()?;
+    let dev = VirtualDevice::builder()?
+        .name("mouse2joy Virtual Joystick")
+        .with_absolute_axis(&abs_x)?
+        .with_absolute_axis(&abs_y)?
+        .with_keys(&keys)?
+        .build()?;
 
     Ok(Mutex::new(dev))
 }
 
-fn centering_loop(shared: Arc<SharedState>, uinput: Arc<Mutex<VirtualDevice>>) {
+fn centering_loop(shared: Arc<SharedState>, uinput: Arc<Mutex<VirtualDevice>>, ui_tx: mpsc::Sender<UiEvent>) {
     let interval = Duration::from_micros(1_000_000 / CENTER_TICK_HZ);
     let mut x: f32 = 0.0;
     let mut y: f32 = 0.0;
-    let mut last_ui = Instant::now();
 
     while shared.running.load(Ordering::Relaxed) {
         let start = Instant::now();
@@ -253,21 +239,8 @@ fn centering_loop(shared: Arc<SharedState>, uinput: Arc<Mutex<VirtualDevice>>) {
             ]);
         }
 
-        if last_ui.elapsed() >= Duration::from_millis(33) {
-            let _ = ui_tx.send(UiEvent::Axes(xi, yi));
-            last_ui = Instant::now();
-        }
-
         let elapsed = start.elapsed();
         if elapsed < interval { thread::sleep(interval - elapsed); }
-    }
-    // Emit center on exit
-    if let Ok(mut ui) = uinput.lock() {
-        let _ = ui.emit(&[
-            evdev::InputEvent::new_now(evdev::EventType::ABSOLUTE.0, AbsoluteAxisCode::ABS_X.0, 0),
-            evdev::InputEvent::new_now(evdev::EventType::ABSOLUTE.0, AbsoluteAxisCode::ABS_Y.0, 0),
-            evdev::InputEvent::new_now(evdev::EventType::SYNCHRONIZATION.0, 0, 0),
-        ]);
     }
 }
 
@@ -286,12 +259,12 @@ fn input_loop(
         for ev in events {
             if !shared.running.load(Ordering::Relaxed) { break; }
             match ev.destructure() {
-                evdev::EventSummary::Key(_, key_code, value) if key_code.as_u16() == grab_button => {
+                evdev::EventSummary::Key(_, key_code, value) if key_code.0 == grab_button => {
                     if value == 1 {
                         let now_grabbed = !shared.grabbed.load(Ordering::Relaxed);
                         shared.grabbed.store(now_grabbed, Ordering::Relaxed);
                         if let Some(a) = &audio {
-                            a.play(if now_grabbed { 1 } else { 0 }, AudioPlayer::f32_load(&shared.volume_fp));
+                            a.play(if now_grabbed { 1 } else { 0 }, SharedState::f32_load(&shared.volume_fp));
                         }
                         let _ = ui_tx.send(UiEvent::Grabbed(now_grabbed));
                         if now_grabbed { let _ = device.grab(); } else { let _ = device.ungrab(); }
@@ -299,7 +272,7 @@ fn input_loop(
                 }
                 evdev::EventSummary::RelativeAxis(_, axis, value) => {
                     if !shared.grabbed.load(Ordering::Relaxed) { continue; }
-                    let sens = AudioPlayer::f32_load(&shared.sensitivity_fp);
+                    let sens = SharedState::f32_load(&shared.sensitivity_fp);
                     let delta = ((value as f32) * sens / 100.0) as i32;
                     match axis {
                         evdev::RelativeAxisCode::REL_X => { shared.x.fetch_add(delta, Ordering::Relaxed); }
@@ -315,18 +288,17 @@ fn input_loop(
 }
 
 fn ui_terminal(shared: Arc<SharedState>, cfg: Rc<RefCell<Config>>) {
-    let (ui_tx, mut ui_rx) = mpsc::channel::<UiEvent>(16);
-    let stdout = std::io::stdout();
-    let mut terminal = ratatui::Terminal::new(ratatui::backend::CrosstermBackend::new(stdout)).unwrap();
-    let mut running = true;
-
-    // Set up centering thread with ui_tx reference
-    let shared_c = shared.clone();
+    let (ui_tx, mut ui_rx) = mpsc::channel::<UiEvent>();
+    let ui_tx_center = ui_tx.clone();
+    let shared_center = shared.clone();
     let _centering_thread = thread::spawn(move || {
-        centering_loop(shared_c, Arc::new(Mutex::new(())).unwrap()); // simplified
+        centering_loop(shared_center, Arc::new(Mutex::new(())).unwrap(), ui_tx_center);
     });
 
-    while running {
+    let stdout = std::io::stdout();
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::CrosstermBackend::new(stdout)).unwrap();
+
+    while shared.running.load(Ordering::Relaxed) {
         terminal.draw(|f| {
             let size = f.size();
             let chunks = Layout::default()
@@ -334,7 +306,6 @@ fn ui_terminal(shared: Arc<SharedState>, cfg: Rc<RefCell<Config>>) {
                 .margin(2)
                 .split(size);
 
-            // Status bar
             let status_text = if shared.grabbed.load(Ordering::Relaxed) {
                 "Status: GRABBED"
             } else {
@@ -343,7 +314,6 @@ fn ui_terminal(shared: Arc<SharedState>, cfg: Rc<RefCell<Config>>) {
             let status = Paragraph::new(status_text).block(Block::default().borders(Borders::ALL));
             f.render_widget(status, chunks[0]);
 
-            // Axis display
             let x_val = shared.x.load(Ordering::Relaxed);
             let y_val = shared.y.load(Ordering::Relaxed);
             let x_paragraph = Paragraph::new(format!("X: {}", x_val)).block(Block::default().borders(Borders::ALL));
@@ -351,7 +321,6 @@ fn ui_terminal(shared: Arc<SharedState>, cfg: Rc<RefCell<Config>>) {
             f.render_widget(x_paragraph, chunks[1]);
             f.render_widget(y_paragraph, chunks[2]);
 
-            // Settings
             let cfg_b = cfg.borrow();
             let sensitivity_text = format!("Sensitivity: {:.1}", cfg_b.sensitivity);
             let center_x_text = format!("Center X: {:.3}", cfg_b.center_strength_x);
@@ -370,22 +339,16 @@ fn ui_terminal(shared: Arc<SharedState>, cfg: Rc<RefCell<Config>>) {
             f.render_widget(settings, chunks[3]);
 
             ControlFlow::Continue
-        })?;
+        }).unwrap();
 
-        // Handle UI events
         if let Ok(ev) = ui_rx.try_recv() {
             match ev {
-                UiEvent::Grabbed(g) => { /* update UI */ }
-                UiEvent::Axes(x, y) => { /* update axis display */ }
-                UiEvent::Quit => { running = false; }
+                UiEvent::Grabbed(g) => { }
+                UiEvent::Axes(x, y) => { }
+                UiEvent::Quit => { return; }
             }
         }
-
-        // Check for quit
-        if shared.quit_requested.load(Ordering::Relaxed) { running = false; }
     }
-
-    let _ = ui_rx.close();
 }
 
 fn main() {
@@ -402,27 +365,19 @@ fn main() {
     let uinput = Arc::new(Mutex::new(create_uinput().expect("Could not create uinput device")));
     let shared = Arc::new(SharedState::new(&cfg));
 
-    // Parse grab button from config (could be "SIDE", "BTN_SIDE", or numeric)
     let grab_button = cfg.grab_button;
-
     let audio = AudioPlayer::new().map(Arc::new);
-    let shared_for_input = shared.clone();
-    let grab_button_local = grab_button;
 
-    // Start input thread
-    let dev = device;
-    let shared_input = shared.clone();
     let ui_tx = mpsc::channel::<UiEvent>(16).0;
+    let shared_input = shared.clone();
     let audio_clone = audio.clone();
     thread::spawn(move || {
-        input_loop(dev, shared_input, grab_button_local, ui_tx, audio_clone);
+        input_loop(device, shared_input, grab_button, ui_tx, audio_clone);
     });
 
-    // Start UI
     let cfg_rc = Rc::new(RefCell::new(cfg));
-    ui_terminal(shared, cfg_rc);
+    ui_terminal(shared, cfg_rc, ui_tx);
 
-    // Save config and clean up
-    save_config(&cfg);
-    shared.running.store(false, std::sync::atomic::Ordering::Relaxed);
+    shared.running.store(false, Ordering::Relaxed);
+    save_config(&cfg_rc.borrow());
 }
