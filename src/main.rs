@@ -1,9 +1,7 @@
 use evdev::{AbsoluteAxisCode, Device, KeyCode, UinputAbsSetup};
 use evdev::uinput::VirtualDevice;
-use ratatui::layout::{Constraint, Direction, Layout, Margin};
-use ratatui::style::{Modifier, Style as TuiStyle};
+use ratatui::layout::{Direction, Layout};
 use ratatui::widgets::{Block, Borders, Paragraph, List, ListItem};
-use ratatui::Terminal;
 use std::cell::RefCell;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -14,7 +12,6 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
-use std::ops::ControlFlow;
 
 const AXIS_MIN: i32 = -32767;
 const AXIS_MAX: i32 = 32767;
@@ -95,9 +92,7 @@ fn detect_mouse_device(configured: &str) -> Option<PathBuf> {
 
 #[derive(Clone, Copy, Debug)]
 enum UiEvent {
-    Grabbed(bool),
-    Axes(i32, i32),
-    Quit,
+    Grabbed,
 }
 
 struct AudioPlayer {
@@ -158,7 +153,6 @@ struct SharedState {
     center_y_fp: AtomicU32,
     center_while_grabbed: AtomicBool,
     volume_fp: AtomicU32,
-    quit_requested: AtomicBool,
 }
 
 impl SharedState {
@@ -173,12 +167,10 @@ impl SharedState {
             center_y_fp: AtomicU32::new((cfg.center_strength_y as f32).to_bits()),
             center_while_grabbed: AtomicBool::new(cfg.center_while_grabbed),
             volume_fp: AtomicU32::new((cfg.audio_volume as f32).to_bits()),
-            quit_requested: AtomicBool::new(false),
         }
     }
 
     fn f32_load(a: &AtomicU32) -> f32 { f32::from_bits(a.load(Ordering::Relaxed)) }
-    fn f32_store(a: &AtomicU32, v: f32) { a.store(v.to_bits(), Ordering::Relaxed) }
 }
 
 fn create_uinput() -> Result<Mutex<VirtualDevice>, Box<dyn std::error::Error>> {
@@ -205,7 +197,7 @@ fn create_uinput() -> Result<Mutex<VirtualDevice>, Box<dyn std::error::Error>> {
     Ok(Mutex::new(dev))
 }
 
-fn centering_loop(shared: Arc<SharedState>, uinput: Arc<Mutex<VirtualDevice>>, ui_tx: mpsc::Sender<UiEvent>) {
+fn centering_loop(shared: Arc<SharedState>, uinput: Arc<Mutex<VirtualDevice>>) {
     let interval = Duration::from_micros(1_000_000 / CENTER_TICK_HZ);
     let mut x: f32 = 0.0;
     let mut y: f32 = 0.0;
@@ -252,8 +244,8 @@ fn input_loop(
     audio: Option<Arc<AudioPlayer>>,
 ) {
     while shared.running.load(Ordering::Relaxed) {
-        let events = match device.fetch_events() {
-            Ok(ev) => ev,
+        let events: Vec<evdev::InputEvent> = match device.fetch_events() {
+            Ok(ev) => ev.collect(),
             Err(_) => { thread::sleep(Duration::from_millis(50)); continue; }
         };
         for ev in events {
@@ -266,7 +258,7 @@ fn input_loop(
                         if let Some(a) = &audio {
                             a.play(if now_grabbed { 1 } else { 0 }, SharedState::f32_load(&shared.volume_fp).into());
                         }
-                        let _ = ui_tx.send(UiEvent::Grabbed(now_grabbed));
+                        let _ = ui_tx.send(UiEvent::Grabbed);
                         if now_grabbed { let _ = device.grab(); } else { let _ = device.ungrab(); }
                     }
                 }
@@ -287,12 +279,11 @@ fn input_loop(
     let _ = device.ungrab();
 }
 
-fn ui_terminal(shared: Arc<SharedState>, cfg: Rc<RefCell<Config>>) {
-    let (ui_tx, mut ui_rx) = mpsc::channel::<UiEvent>();
-    let ui_tx_center = ui_tx.clone();
+fn ui_terminal(shared: Arc<SharedState>, cfg: Rc<RefCell<Config>>, _ui_tx: mpsc::Sender<UiEvent>, ui_rx: mpsc::Receiver<UiEvent>, uinput: Arc<Mutex<VirtualDevice>>) {
     let shared_center = shared.clone();
+    let uinput_center = uinput.clone();
     let _centering_thread = thread::spawn(move || {
-        centering_loop(shared_center, Arc::new(Mutex::new(())).unwrap(), ui_tx_center);
+        centering_loop(shared_center, uinput_center);
     });
 
     let stdout = std::io::stdout();
@@ -338,14 +329,12 @@ fn ui_terminal(shared: Arc<SharedState>, cfg: Rc<RefCell<Config>>) {
             .block(Block::default().borders(Borders::ALL));
             f.render_widget(settings, chunks[3]);
 
-            ControlFlow::Continue
+            ()
         }).unwrap();
 
         if let Ok(ev) = ui_rx.try_recv() {
             match ev {
-                UiEvent::Grabbed(g) => { }
-                UiEvent::Axes(x, y) => { }
-                UiEvent::Quit => { return; }
+                UiEvent::Grabbed => { }
             }
         }
     }
@@ -362,21 +351,22 @@ fn main() {
     };
 
     let device = Device::open(&device_path).expect("Could not open mouse device");
-    let uinput = Arc::new(Mutex::new(create_uinput().expect("Could not create uinput device")));
+    let uinput = Arc::new(create_uinput().expect("Could not create uinput device"));
     let shared = Arc::new(SharedState::new(&cfg));
 
     let grab_button = cfg.grab_button;
     let audio = AudioPlayer::new().map(Arc::new);
 
-    let ui_tx = mpsc::channel::<UiEvent>(16).0;
+    let (ui_tx, ui_rx) = mpsc::channel::<UiEvent>();
+    let ui_tx_input = ui_tx.clone();
     let shared_input = shared.clone();
     let audio_clone = audio.clone();
     thread::spawn(move || {
-        input_loop(device, shared_input, grab_button, ui_tx, audio_clone);
+        input_loop(device, shared_input, grab_button, ui_tx_input, audio_clone);
     });
 
     let cfg_rc = Rc::new(RefCell::new(cfg));
-    ui_terminal(shared, cfg_rc, ui_tx);
+    ui_terminal(shared.clone(), cfg_rc.clone(), ui_tx, ui_rx, uinput);
 
     shared.running.store(false, Ordering::Relaxed);
     save_config(&cfg_rc.borrow());

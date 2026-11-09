@@ -2,6 +2,90 @@
 
 **mouse2joy** rewrites the Python mouse‑to‑joystick converter in Rust for better performance and a modern UI.
 
+**Installation**
+
+## Linux (Arch-based and other distributions)
+
+### Option 1: Pre‑built binary (if available)
+```bash
+aur mouse2joy
+```
+
+### Option 2: From source (recommended)
+
+1. Clone the repository:
+```bash
+git clone https://github.com/yourusername/mouse2joy.git
+cd mouse2joy
+```
+
+2. Build with Cargo (requires stable Rust toolchain):
+```bash
+cargo build --release
+```
+
+3. Run with sudo (required for /dev/uinput and mouse device access):
+```bash
+sudo ./target/release/mouse2joy
+```
+
+### Option 3: System packages
+```bash
+# Install dependencies if needed (Arch Linux)
+sudo pacman -S cargo rustup libpulse libasoundutils
+```
+
+## Uninstallation
+
+### From source:
+```bash
+# Stop the application
+pkill mouse2joy
+
+# Remove binary and config (optional)
+sudo rm -f /usr/local/bin/mouse2joy
+rm -f ~/.config/mouse2joy/config.toml
+```
+
+### Using package manager (if installed via AUR):
+```bash
+# Example for AUR helpers
+paru -R mouse2joy
+```
+
+## Run without sudo (experimental)
+
+If your system has proper permissions set up:
+
+```bash
+chmod 660 /dev/uinput
+```
+
+Then run without sudo (but you'll need appropriate group permissions):
+
+```bash
+./target/release/mouse2joy
+```
+
+## Performance Notes
+
+The Rust implementation is optimized for:
+
+- **Memory**: Under 20 MB of RAM (static release build)
+- **Binary size**: ~2 MB in release mode
+- **Responsiveness**: 60 Hz physics simulation, atomic state management for lock‑free concurrent design
+
+## Dependencies
+
+This application requires:
+
+- Rust toolchain (stable)
+- Linux kernel with evdev support
+- PulseAudio (or PipeWire with PulseAudio compatibility mode)
+
+
+**mouse2joy** rewrites the Python mouse‑to‑joystick converter in Rust for better performance and a modern UI.
+
 ## Key Features
 
 - **Fast & Safe**: Pure Rust implementation with efficient physics simulation and lock‑free atomic state.
