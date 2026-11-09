@@ -1,16 +1,16 @@
 use evdev::{
-    AbsInfo, AbsoluteAxisCode, AttributeSet, Device, EventSummary, InputEventKind, KeyCode,
+    AbsInfo, AbsoluteAxisCode, AttributeSet, Device, EventSummary, InputEvent, KeyCode,
     RelativeAxisCode, UinputAbsSetup,
 };
 use evdev::uinput::VirtualDevice;
-use crossterm::event::{Event, KeyCode, KeyEvent};
+use crossterm::event::{Event, KeyCode as CrosstermKeyCode, KeyEvent};
 use crossterm::execute;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::style::Color;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout, Margin};
 use ratatui::style::{Modifier, Style as TuiStyle};
-use ratatui::widgets::{Block, Borders, Gauge, Paragraph, Widget, Fill, List, ListItem};
+use ratatui::widgets::{Block, Borders, Gauge, Paragraph, Widget, List, ListItem};
 use ratatui::Terminal;
 use std::borrow::Cow;
 use std::cell::RefCell;
@@ -23,6 +23,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
+use std::ops::ControlFlow;
 
 const AXIS_MIN: i32 = -32767;
 const AXIS_MAX: i32 = 32767;
@@ -194,11 +195,11 @@ impl SharedState {
 fn clamp_i32(v: i32, lo: i32, hi: i32) -> i32 { v.max(lo).min(hi) }
 
 fn create_uinput() -> Result<Mutex<VirtualDevice>, Box<dyn std::error::Error>> {
-    let abs_x = evdev::uinput::UinputAbsSetup::new(
+    let abs_x = UinputAbsSetup::new(
         AbsoluteAxisCode::ABS_X,
         evdev::AbsInfo::new(0, AXIS_MIN, AXIS_MAX, 0, 0, 0),
     );
-    let abs_y = evdev::uinput::UinputAbsSetup::new(
+    let abs_y = UinputAbsSetup::new(
         AbsoluteAxisCode::ABS_Y,
         evdev::AbsInfo::new(0, AXIS_MIN, AXIS_MAX, 0, 0, 0),
     );
@@ -207,12 +208,12 @@ fn create_uinput() -> Result<Mutex<VirtualDevice>, Box<dyn std::error::Error>> {
     keys.insert(KeyCode::BTN_THUMB);
     keys.insert(KeyCode::BTN_THUMB2);
 
-    let dev = VirtualDevice::builder()?
-        .name("mouse2joy Virtual Joystick")?
-        .with_absolute_axis(&abs_x)?
-        .with_absolute_axis(&abs_y)?
-        .with_keys(&keys)?
-        .build()?;
+    let mut dev = VirtualDevice::builder()?;
+    dev = dev.name("mouse2joy Virtual Joystick")?;
+    dev = dev.with_absolute_axis(&abs_x)?;
+    dev = dev.with_absolute_axis(&abs_y)?;
+    dev = dev.with_keys(&keys)?;
+    let dev = dev.build()?;
 
     Ok(Mutex::new(dev))
 }
@@ -222,14 +223,13 @@ fn centering_loop(shared: Arc<SharedState>, uinput: Arc<Mutex<VirtualDevice>>) {
     let mut x: f32 = 0.0;
     let mut y: f32 = 0.0;
     let mut last_ui = Instant::now();
-    let mut audio = AudioPlayer::new();
 
     while shared.running.load(Ordering::Relaxed) {
         let start = Instant::now();
         let grabbed = shared.grabbed.load(Ordering::Relaxed);
         let cwg = shared.center_while_grabbed.load(Ordering::Relaxed);
-        let cx = AudioPlayer::f32_load(&shared.center_x_fp);
-        let cy = AudioPlayer::f32_load(&shared.center_y_fp);
+        let cx = SharedState::f32_load(&shared.center_x_fp);
+        let cy = SharedState::f32_load(&shared.center_y_fp);
 
         let dx = shared.x.swap(0, Ordering::Relaxed) as f32;
         let dy = shared.y.swap(0, Ordering::Relaxed) as f32;
@@ -254,7 +254,7 @@ fn centering_loop(shared: Arc<SharedState>, uinput: Arc<Mutex<VirtualDevice>>) {
         }
 
         if last_ui.elapsed() >= Duration::from_millis(33) {
-            let _ = mpsc::channel::<UiEvent>(0).0.send(UiEvent::Axes(xi, yi));
+            let _ = ui_tx.send(UiEvent::Axes(xi, yi));
             last_ui = Instant::now();
         }
 
