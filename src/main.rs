@@ -264,7 +264,7 @@ fn input_loop(
                         let now_grabbed = !shared.grabbed.load(Ordering::Relaxed);
                         shared.grabbed.store(now_grabbed, Ordering::Relaxed);
                         if let Some(a) = &audio {
-                            a.play(if now_grabbed { 1 } else { 0 }, SharedState::f32_load(&shared.volume_fp));
+                            a.play(if now_grabbed { 1 } else { 0 }, SharedState::f32_load(&shared.volume_fp).into());
                         }
                         let _ = ui_tx.send(UiEvent::Grabbed(now_grabbed));
                         if now_grabbed { let _ = device.grab(); } else { let _ = device.ungrab(); }
