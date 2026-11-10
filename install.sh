@@ -77,7 +77,7 @@ build_app() {
     else
         echo "Fetching source code..."
         BUILD_DIR=$(mktemp -d)
-        git clone https://github.com/yourusername/mouse2joy.git "$BUILD_DIR"
+        git clone https://github.com/Orangericce/mouse2joy.git "$BUILD_DIR"
         cd "$BUILD_DIR"
         cargo build --release
         BIN_SRC="$BUILD_DIR/target/release/mouse2joy"
