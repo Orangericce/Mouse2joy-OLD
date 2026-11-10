@@ -1,198 +1,141 @@
 # mouse2joy - Rust Implementation
 
-**mouse2joy** rewrites the Python mouse‑to‑joystick converter in Rust for better performance and a modern UI.
+**mouse2joy** rewrites the Python mouse‑to‑joystick converter in Rust for better performance, zero latency, desktop menu integration, and a modern Terminal UI (TUI).
 
-**Installation - One Command**
+---
 
-The easiest way to install is with the single-install script:
+## What Has to Be Done Next (Roadmap)
 
-## Using the install script (recommended)
+> **Note for Contributors & Maintainers:** This section is kept up to date every time changes are made.
+
+- [x] **Desktop Integration**: Add `.desktop` launcher and multi-resolution app icons so `mouse2joy` appears as a native application in Linux launcher menus.
+- [x] **Improved Installer**: Smart `install.sh` that configures `/dev/uinput` permissions (udev rule + `input` group), installs PulseAudio headers if missing, compiles the release binary, and sets up desktop launchers.
+- [ ] **Interactive TUI Tweak Controls**: Allow key bindings inside the Ratatui UI (`+`/`-` or `Up`/`Down`) to live-adjust sensitivity, center strength, and volume directly without manually editing `config.toml`.
+- [ ] **Unit & Integration Tests**: Add automated unit test coverage for config parsing/saving, mouse auto-detection, and virtual joystick setup.
+- [ ] **Missing Example Files**: Provide `examples/minimal.rs` and `examples/integration.rs` referenced in docs.
+- [ ] **Restore & Fix GitHub Actions CI**: Re-add `.github/workflows/rust.yml` with proper system dependencies (`libpulse-dev`, `libevdev-dev`) to ensure clean builds on PRs.
+- [ ] **Systemd User Service (Optional Background Mode)**: Add a `systemd --user` service unit for users who prefer running `mouse2joy` continuously in the background without opening a terminal window.
+
+---
+
+## Installation - Desktop & Terminal
+
+### Option 1: One-Command Installer (Recommended)
+
+Run the automated installer script:
 
 ```bash
-# Download and run the installer (requires curl and sudo)
+# Download and install mouse2joy (installs binary, uinput udev rules, desktop launcher & icons)
 curl -fsSL https://raw.githubusercontent.com/yourusername/mouse2joy/main/install.sh | bash
 ```
 
-Or if you prefer wget:
+Or run locally from the source directory:
 ```bash
-wget -qO- https://raw.githubusercontent.com/yourusername/mouse2joy/main/install.sh | bash
+./install.sh
 ```
 
-The script will:
-- Detect your Linux distribution
-- Install Rust if not already present
-- Build the release binary
-- Set up the config file at `~/.config/mouse2joy/config.toml`
-- Create a `/usr/local/bin/mouse2joy` symlink or copy
-- Add uinput permissions if needed
+**What the installer does:**
+1. Checks for Rust / `cargo` (installs via `rustup` if missing).
+2. Installs required Audio development libraries (`libpulse-dev` / `libpulse`).
+3. Compiles the release binary (`target/release/mouse2joy`).
+4. Installs the binary to `/usr/local/bin/mouse2joy`.
+5. Installs the **desktop launcher** (`mouse2joy.desktop`) and application icons (`16x16` up to `256x256` + SVG) so `mouse2joy` appears in your Linux Application Menu.
+6. Configures `/dev/uinput` permissions with a `/etc/udev/rules.d/99-mouse2joy-uinput.rules` udev rule and adds your user to the `input` group so you don't need `sudo` every time.
+7. Initializes `~/.config/mouse2joy/config.toml` with default settings.
 
-## Manual one-line build (if you have Rust)
+---
 
-If you already have Rust installed, you can build and install with one command:
+### Option 2: Manual Build (For Rust Developers)
+
+If you already have Rust and PulseAudio libraries installed:
 
 ```bash
-# Build release and install to /usr/local/bin
+# Clone the repository
+git clone https://github.com/yourusername/mouse2joy.git
+cd mouse2joy
+
+# Build and install
 cargo install --path . --locked
+
+# Copy desktop launcher (optional)
+sudo cp resources/mouse2joy.desktop /usr/local/share/applications/
 ```
 
-Or build manually:
+---
+
+## Running the Application
+
+### 1. From Desktop Application Launcher
+Search for **mouse2joy** in your Linux application launcher / GNOME Activities / KDE Application Menu / Rofi and click to open! It will launch inside a terminal window seamlessly.
+
+### 2. From Command Line
 ```bash
-cargo build --release && sudo cp target/release/mouse2joy /usr/local/bin/mouse2joy
-```
-
-## Quick Start After Installation
-
-```bash
-# Run the application (requires sudo for /dev/uinput access)
-sudo mouse2joy
-```
-
-## Run without sudo (advanced)
-
-If your system has proper permissions:
-
-```bash
-chmod 660 /dev/uinput
 mouse2joy
 ```
 
-## Installation Troubleshooting
+*If you encounter permission issues with `/dev/uinput`, run with `sudo mouse2joy` or log out and log back in for the `input` group permissions to take effect.*
 
-- **'command not found: cargo'**: Install Rust first: `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
-- **Permission denied on /dev/uinput**: Run `sudo usermod -a -G input $USER` and log out/in, or use `sudo mouse2joy`
-- **No mouse device found**: Ensure the script detects your mouse; you can specify it manually in `~/.config/mouse2joy/config.toml`
+---
 
 ## Configuration
 
-After first run, config is at `~/.config/mouse2joy/config.toml`. Edit it to customize:
-
-- `device` - Mouse device path (auto-detected usually)
-- `grab_button` - Which button toggles grab (default: SIDE/button 5)
-- `sensitivity` - Joystick sensitivity
-- `center_strength_x/y` - Spring-back strength
-- `audio_volume` - Volume percentage
-
-## Uninstallation
-
-```bash
-# Using the script (if it was used for install)
-uninstall mouse2joy
-
-# Or manually:
-sudo rm -f /usr/local/bin/mouse2joy
-rm -rf ~/.config/mouse2joy
-```
-
-## Key Features
-
-- **Fast & Safe**: Pure Rust implementation with efficient physics simulation and lock‑free atomic state.
-- **Terminal UI**: Rich Ratatui interface with real‑time monitoring of axes, settings, and audio volume.
-- **Audio Feedback**: PulseAudio‑driven sine wave cues (880 Hz grab, 440 Hz ungrab) with smooth fade‑in/fade‑out and adjustable master volume.
-- **Persistent Config**: TOML‑based settings that survive application restarts.
-- **Auto Detection**: Scans `/dev/input/by‑id/` for a mouse device and falls back to the configured path.
-- **Spring‑Back Center**: 60 Hz physics loop; X and Y centering strengths are configurable (default 0.04 / 0.02).
-- **Lightweight**: Under 20 MB of RAM and ~2 MB binary (static release build). Requires only common Linux user‑space tools (evdev, PulseAudio).
-
-## Quick Start
-
-```bash
-# First time (install dependencies if needed)
-cargo build --release
-
-# Run (requires sudo for /dev/uinput and mouse access)
-sudo ./target/release/mouse2joy
-```
-
-## Configuration
-
-All settings are stored in `~/.config/mouse2joy/config.toml`. When the program first runs, it writes a sensible defaults file if none exists:
+Settings are saved at `~/.config/mouse2joy/config.toml`. When the app first runs, it generates standard default values:
 
 ```toml
 [mouse]
-# Path to your mouse (can be auto‑detected if empty)
-device = "/dev/input/by-id/usb-Compx_VXE_NordicMouse_1K_Dongle-if02-event-mouse"
+# Path to your mouse (auto-detected if empty)
+device = ""
 
-# Which mouse button is the grab toggle (key codes match evdev BTN_* constants)
-grab_button = "SIDE"      # BTN_SIDE  → mouse button 5
+# Mouse button used to toggle grab mode (SIDE = Mouse Button 5)
+grab_button = "SIDE"
 
-# Mouse sensitivity (joystick units per raw event unit)
+# Mouse sensitivity (joystick movement multiplier)
 sensitivity = 1000.0
 
-# Spring‑back centering strength (0.0 = no pull, 1.0 = instant snap)
-center_strength_x = 0.04  # roll
-center_strength_y = 0.02  # pitch
+# Spring-back centering strength (0.0 = float, 1.0 = instant center snap)
+center_strength_x = 0.04  # Roll
+center_strength_y = 0.02  # Pitch
 
-# Whether the stick continues to center while you keep the grab button pressed
+# Centering active while grab is held
 center_while_grabbed = true
 
 # Audio volume (0.0 = silent, 1.0 = max)
 audio_volume = 0.5
 ```
 
-**You can edit this file at any time while the app is running.**
+---
 
-**Note on grab_button** – Supported values include:
-- Human‑readable names: `SIDE`, `MIDDLE`, `LEFT`, `RIGHT` (maps to `BTN_SIDE`, `BTN_MIDDLE`, etc.).
-- Numeric codes: `5` (BTN_SIDE), `4` (BTN_MIDDLE), etc.
-- `BTN_SIDE` also corresponds to mouse button 5 on most desktop mice.
+## Key Features
 
-## UI Features
+- **Standard Linux App**: Full desktop entry integration (`.desktop`) with multi-size high-res vector icon.
+- **Fast & Safe**: Pure Rust implementation with efficient physics simulation and lock‑free atomic state (`std::sync::atomic`).
+- **Terminal UI**: Real-time monitoring of X/Y axis meters, status, and audio settings via `Ratatui`.
+- **Audio Feedback**: Sine wave audio cues (880 Hz grab, 440 Hz ungrab) powered by `PulseAudio`.
+- **Zero Sudo Needed**: Automated udev rule setup so normal desktop users can capture `/dev/uinput`.
 
-- **Status Bar** (top) – Shows **GRABBED** in green or **RELEASED** in gray; updates live when you press the grab button.
-- **Axis Meters** (middle) – Two vertical gauges with colored bars. The numeric X/Y values under them are the latest joystick positions sent to the virtual stick.
-- **Settings Panel** (bottom) – A list of real‑time values you can tweak:
-  - **Sensitivity** – How fast the virtual axis moves when you move the mouse.
-  - **Center X** – Roll strength (X‑axis spring‑back).
-  - **Center Y** – Pitch strength (Y‑axis spring‑back).
-  - **Volume** – Audio cue level (percentage).
-  - **Center While Grabbed** – Toggle; “ON”/“OFF” line reflects the current boolean.
-- **Quit** – Any key (defaults to `q`) closes the UI gracefully and saves the config.
-
-All values are updated via channels and displayed by the Ratatui terminal renderer at ~60 Hz, giving a responsive feel.
-
-## Audio System
-
-- **Grab cue** – Higher‑pitch sine wave (880 Hz, 100 ms, smooth fade‑in).
-- **Ungrab cue** – Lower‑pitch sine wave (440 Hz, 100 ms, gentle fade‑out).
-- **Volume** – Adjustable from 0 % to 100 % of the PulseAudio master volume.
-- **Compatibility** – Works with any PulseAudio server (local ALSA, PipeWire, etc.). No extra dependencies beyond `libpulse‑binding` and `libpulse‑simple‑binding`.
+---
 
 ## Controls
 
-- **Mouse side button** (default button 5) – Toggles grab mode. When grabbed, the mouse is captured (hidden from other applications); when released, the OS cursor returns.
-- **Keyboard** – `Ctrl+C` during the terminal UI closes the program cleanly (saves config, centers joystick, plays exit cue).
-- **UI** – Press `q` in the terminal to quit; the program emits a final "ungrab” sound and restores mouse visibility.
+- **Mouse Side Button (Button 5 / BTN_SIDE)**: Toggles mouse grab on/off.
+- **`q` or `Ctrl+C`**: Gracefully quit the application and restore normal cursor operation.
 
-## Performance
+---
 
-- **60 Hz Centering Loop** – Dedicated thread runs at 60 Hz, using atomic fields for X/Y to avoid mutexes.
-- **Lock‑Free State** – All state (`x`, `y`, `grabbed`, etc.) is managed via `std::sync::atomic` primitives, ensuring no data races and minimal contention.
-- **Streamlined I/O** – `evdev` reads raw events directly (no polling) and only buffers them while grabbed.
-- **Low Memory Footprint** – All buffers are small; the whole program stays well under 20 MB even with the Ratatui runtime.
-
-## Files
-
-- **`src/main.rs`** – Core application: mouse input, virtual joystick, centering physics, audio output, terminal UI, and config handling.
-- **`Cargo.toml`** – Dependencies and release‑profile optimizations (LTO, static linking friendly).
-- **`examples/minimal.rs`** – Example of a minimal config for a custom mouse or alternative key codes.
-- **`resources/`** – Placeholder for custom tray or terminal icons (optional).
-
-## Technical Details
-
-- **Stack**: `evdev` (Linux input handling), `ratatui` + `crossterm` (TUI), `serde`/`toml` (config), `dirs` (XDG config directory), `libpulse‑binding` + `libpulse‑simple‑binding` (audio).
-- **Architecture**: One `SharedState` struct holds all mutable data as atomic fields; threads communicate via channels (input → state, state → UI, centering → uinput).
-- **Safety**: All access is `unsafe`‑free; the code uses Rust’s ownership and atomic APIs to guarantee memory safety and data integrity.
-- **Portability**: Runs on any Linux distribution that exposes `/dev/input` and `/dev/uinput` (standard on desktop/embedded). No graphical window system required.
-
-## Testing
+## Uninstallation
 
 ```bash
-# Unit tests (if any)
-cargo test
+# Remove binary & launchers
+sudo rm -f /usr/local/bin/mouse2joy
+sudo rm -f /usr/local/share/applications/mouse2joy.desktop
+rm -f ~/.local/share/applications/mouse2joy.desktop
+sudo rm -rf /usr/local/share/icons/hicolor/*/apps/mouse2joy.*
 
-# Integration test (spawn a dummy mouse device and check output)
-# See `examples/integration.rs` for a minimal smoke‑test.
+# Optional: Remove config directory
+rm -rf ~/.config/mouse2joy
 ```
+
+---
 
 ## License
 

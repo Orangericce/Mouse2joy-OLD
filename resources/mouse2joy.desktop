@@ -1,0 +1,12 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=mouse2joy
+GenericName=Mouse to Joystick Converter
+Comment=Convert mouse input into a virtual joystick with a terminal UI
+Exec=mouse2joy
+Icon=mouse2joy
+Terminal=true
+Categories=Utility;
+Keywords=mouse;joystick;uinput;evdev;gamepad;accessibility;X-InputDevice;
+StartupNotify=false

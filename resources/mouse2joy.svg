@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2d3447"/>
+      <stop offset="1" stop-color="#1a1f2e"/>
+    </linearGradient>
+    <linearGradient id="body" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#4a90d9"/>
+      <stop offset="1" stop-color="#2d6fb8"/>
+    </linearGradient>
+    <linearGradient id="stick" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#e8e8e8"/>
+      <stop offset="1" stop-color="#9aa0a8"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="6" stdDeviation="10" flood-color="#000" flood-opacity="0.5"/>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect x="0" y="0" width="512" height="512" rx="96" fill="url(#bg)"/>
+
+  <!-- Mouse body -->
+  <g filter="url(#shadow)">
+    <path d="M120 160 Q120 80 256 80 Q392 80 392 160 L392 320 Q392 400 256 400 Q120 400 120 320 Z"
+          fill="url(#body)" stroke="#1a1f2e" stroke-width="6"/>
+    <!-- Mouse wheel / divider -->
+    <rect x="220" y="150" width="72" height="10" rx="5" fill="#1a1f2e" opacity="0.6"/>
+    <!-- Left/right button split -->
+    <line x1="256" y1="150" x2="256" y2="230" stroke="#1a1f2e" stroke-width="4" stroke-linecap="round"/>
+  </g>
+
+  <!-- Joystick overlay -->
+  <g filter="url(#shadow)">
+    <!-- base -->
+    <ellipse cx="256" cy="396" rx="120" ry="22" fill="#0d1117" opacity="0.7"/>
+    <!-- shaft -->
+    <rect x="244" y="250" width="24" height="140" rx="12" fill="#2a3142"/>
+    <!-- ball top -->
+    <circle cx="256" cy="250" r="46" fill="url(#stick)" stroke="#1a1f2e" stroke-width="6"/>
+    <!-- axis indicator -->
+    <circle cx="256" cy="250" r="10" fill="#1a1f2e"/>
+  </g>
+
+  <!-- accent ring -->
+  <circle cx="256" cy="256" r="230" fill="none" stroke="#4a90d9" stroke-width="3" opacity="0.25"/>
+</svg>
