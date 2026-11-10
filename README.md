@@ -26,7 +26,7 @@ Run the automated installer script:
 
 ```bash
 # Download and install mouse2joy (installs binary, uinput udev rules, desktop launcher & icons)
-curl -fsSL https://raw.githubusercontent.com/yourusername/mouse2joy/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Orangericce/mouse2joy/main/install.sh | bash
 ```
 
 Or run locally from the source directory:
@@ -51,7 +51,7 @@ If you already have Rust and PulseAudio libraries installed:
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/mouse2joy.git
+git clone https://github.com/Orangericce/mouse2joy.git
 cd mouse2joy
 
 # Build and install
