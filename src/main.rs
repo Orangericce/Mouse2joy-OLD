@@ -322,11 +322,9 @@ fn input_loop(
                     match axis {
                         evdev::RelativeAxisCode::REL_X => {
                             shared.x.fetch_add(delta, Ordering::Relaxed);
-                            shared.pos_x.store(shared.x.load(Ordering::Relaxed), Ordering::Relaxed);
                         }
                         evdev::RelativeAxisCode::REL_Y => {
                             shared.y.fetch_add(delta, Ordering::Relaxed);
-                            shared.pos_y.store(shared.y.load(Ordering::Relaxed), Ordering::Relaxed);
                         }
                         _ => {}
                     }
