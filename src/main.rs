@@ -169,8 +169,6 @@ impl AudioPlayer {
 struct SharedState {
     x: AtomicI32,
     y: AtomicI32,
-    pos_x: AtomicI32,
-    pos_y: AtomicI32,
     display_dx: AtomicI32,
     display_dy: AtomicI32,
     grabbed: AtomicBool,
@@ -1153,19 +1151,6 @@ impl AppState {
                 label.remove_css_class("status-grabbed");
                 label.remove_css_class("status-released");
                 label.add_css_class(if grabbed { "status-grabbed" } else { "status-released" });
-            }
-
-            // Handle button click for toggle grab
-            if let Some(window) = &self.window && window.is_visible() {
-                window.connect_button_press_event(move |_, _| {
-                    // Toggle grabbed state on any mouse button press when not in binding mode
-                    if !shared.binding_mode.load(Ordering::Relaxed) {
-                        let now_grabbed = !shared.grabbed.load(Ordering::Relaxed);
-                        shared.grabbed.store(now_grabbed, Ordering::Relaxed);
-                        // Note: this would ideally capture the device event, but GUI needs a dedicated button widget for toggle
-                    }
-                    glib::Propagation::Stop
-                });
             }
 
             // Update movement display - ALWAYS SHOW (even when not grabbed)
