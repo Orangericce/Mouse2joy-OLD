@@ -431,6 +431,7 @@ struct AppState {
     window: Option<ApplicationWindow>,
     status_label: Option<Label>,
     status_movement_label: Option<Label>,
+    drawing_area: Option<DrawingArea>,
     x_scale: Option<Scale>,
     y_scale: Option<Scale>,
     x_value_label: Option<Label>,
@@ -601,6 +602,24 @@ impl AppState {
         status_frame.set_child(Some(&status_box));
         main_box.append(&status_frame);
 
+        // Circular XY indicator
+        let drawing_area = DrawingArea::new();
+        drawing_area.set_size_request(200, 200);
+        drawing_area.set_hexpand(true);
+        drawing_area.add_css_class("xy-indicator");
+        self.drawing_area = Some(drawing_area.clone());
+
+        let xy_frame = Frame::new(Some("XY Joystick Position"));
+        let xy_box = GtkBox::new(Orientation::Vertical, 8);
+        xy_box.set_margin_top(12);
+        xy_box.set_margin_bottom(12);
+        xy_box.set_margin_start(12);
+        xy_box.set_margin_end(12);
+        xy_box.set_halign(gtk4::Align::Center);
+        xy_box.append(&drawing_area);
+        xy_frame.set_child(Some(&xy_box));
+        main_box.append(&xy_frame);
+
         // Settings section
         let settings_frame = Frame::new(Some("Settings"));
         let settings_grid = Grid::new();
@@ -762,6 +781,24 @@ impl AppState {
         device_box.append(&scrolled);
         device_frame.set_child(Some(&device_box));
         main_box.append(&device_frame);
+
+        // Export/Import buttons
+        let io_frame = Frame::new(Some("Configuration"));
+        let io_box = GtkBox::new(Orientation::Horizontal, 12);
+        io_box.set_margin_top(12);
+        io_box.set_margin_bottom(12);
+        io_box.set_margin_start(12);
+        io_box.set_margin_end(12);
+        io_box.set_halign(gtk4::Align::Center);
+
+        let export_btn = Button::with_label("Export Config");
+        let import_btn = Button::with_label("Import Config");
+        self.export_btn = Some(export_btn.clone());
+        self.import_btn = Some(import_btn.clone());
+        io_box.append(&export_btn);
+        io_box.append(&import_btn);
+        io_frame.set_child(Some(&io_box));
+        main_box.append(&io_frame);
 
         // Export/Import buttons
         let io_frame = Frame::new(Some("Configuration"));
@@ -1114,6 +1151,9 @@ impl AppState {
         let y_scale = self.y_scale.clone();
         let x_value_label = self.x_value_label.clone();
         let y_value_label = self.y_value_label.clone();
+        let status_movement_label = self.status_movement_label.clone();
+        let pos_x = shared.pos_x.clone();
+        let pos_y = shared.pos_y.clone();
 
         glib::timeout_add_local(Duration::from_millis(16), move || {
             // Handle UI events
@@ -1157,6 +1197,16 @@ impl AppState {
                 let dx = shared.display_dx.swap(0, Ordering::Relaxed);
                 let dy = shared.display_dy.swap(0, Ordering::Relaxed);
                 movement_label.set_label(&format!("Movement: X={} Y={}", dx, dy));
+            }
+
+            // Draw circular indicator for recent movement (circle radius 50, line from center to pos_x/pos_y)
+            // Need to re-check for DrawingArea in AppState - it's still present but not used
+            if let Some(drawing_area) = &self.drawing_area {
+                let x = shared.pos_x.load(Ordering::Relaxed);
+                let y = shared.pos_y.load(Ordering::Relaxed);
+                // Drawing logic for circular indicator would go here
+                // For now, just mark as needing redraw
+                drawing_area.queue_draw();
             }
 
             // Update X/Y scale displays
