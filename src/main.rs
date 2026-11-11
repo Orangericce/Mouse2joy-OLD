@@ -1,3 +1,4 @@
+// final replacement for the entire file
 use evdev::{AbsoluteAxisCode, Device, KeyCode, UinputAbsSetup, AttributeSet};
 use evdev::uinput::VirtualDevice;
 use gtk4::prelude::*;
@@ -5,7 +6,7 @@ use gtk4::{
     Application, ApplicationWindow, Box as GtkBox, Orientation, Scale, Entry, Switch, Button,
     Label, Grid, ListBox, ListBoxRow, Frame, ScrolledWindow, HeaderBar,
     FileFilter, Adjustment, MessageDialog, DialogFlags,
-    ButtonsType, CssProvider, DrawingArea, gio, glib,
+    ButtonsType, CssProvider, gio, glib,
 };
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -114,6 +115,7 @@ fn list_all_mouse_devices() -> Vec<(String, PathBuf)> {
 enum UiEvent {
     Grabbed,
     RawButton(u16),
+    DeviceError(String),
 }
 
 struct AudioPlayer {
@@ -167,8 +169,8 @@ impl AudioPlayer {
 struct SharedState {
     x: AtomicI32,
     y: AtomicI32,
-    pos_x: AtomicI32,
-    pos_y: AtomicI32,
+    display_dx: AtomicI32,
+    display_dy: AtomicI32,
     grabbed: AtomicBool,
     running: AtomicBool,
     sensitivity_fp: AtomicU32,
@@ -184,8 +186,8 @@ impl SharedState {
         Self {
             x: AtomicI32::new(0),
             y: AtomicI32::new(0),
-            pos_x: AtomicI32::new(0),
-            pos_y: AtomicI32::new(0),
+            display_dx: AtomicI32::new(0),
+            display_dy: AtomicI32::new(0),
             grabbed: AtomicBool::new(false),
             running: AtomicBool::new(true),
             sensitivity_fp: AtomicU32::new((cfg.sensitivity as f32).to_bits()),
@@ -250,8 +252,6 @@ fn centering_loop(shared: Arc<SharedState>, uinput: Arc<Mutex<VirtualDevice>>) {
 
         let xi = x as i32;
         let yi = y as i32;
-        shared.pos_x.store(xi, Ordering::Relaxed);
-        shared.pos_y.store(yi, Ordering::Relaxed);
         if let Ok(mut ui) = uinput.lock() {
             let _ = ui.emit(&[
                 evdev::InputEvent::new_now(evdev::EventType::ABSOLUTE.0, AbsoluteAxisCode::ABS_X.0, xi),
@@ -271,20 +271,10 @@ fn input_loop(
     grab_button: Arc<AtomicU32>,
     ui_tx: mpsc::Sender<UiEvent>,
     audio: Option<Arc<AudioPlayer>>,
-    device_switch_rx: mpsc::Receiver<PathBuf>,
 ) {
-    loop {
-        // Check for device switch
-        if let Ok(new_path) = device_switch_rx.try_recv() {
-            let _ = device.ungrab();
-            shared.grabbed.store(false, Ordering::Relaxed);
-            shared.pos_x.store(0, Ordering::Relaxed);
-            shared.pos_y.store(0, Ordering::Relaxed);
-            if let Ok(new_dev) = Device::open(&new_path) {
-                device = new_dev;
-            }
-        }
+    let _ = device.set_nonblocking(true);
 
+    loop {
         if !shared.running.load(Ordering::Relaxed) { break; }
 
         let events: Vec<evdev::InputEvent> = match device.fetch_events() {
@@ -295,17 +285,37 @@ fn input_loop(
             if !shared.running.load(Ordering::Relaxed) { break; }
             match ev.destructure() {
                 evdev::EventSummary::Key(_, key_code, value) => {
-                    if value == 1 && key_code.0 == grab_button.load(Ordering::Relaxed) as u16 {
-                        let now_grabbed = !shared.grabbed.load(Ordering::Relaxed);
-                        shared.grabbed.store(now_grabbed, Ordering::Relaxed);
-                        if let Some(a) = &audio {
-                            a.play(if now_grabbed { 1 } else { 0 }, SharedState::f32_load(&shared.volume_fp).into());
+                    if shared.binding_mode.load(Ordering::Relaxed) {
+                        if value == 1 {
+                            let _ = ui_tx.send(UiEvent::RawButton(key_code.0));
                         }
-                        let _ = ui_tx.send(UiEvent::Grabbed);
-                        if now_grabbed { let _ = device.grab(); } else { let _ = device.ungrab(); }
+                        continue;
+                    }
+
+                    if key_code.0 == grab_button.load(Ordering::Relaxed) as u16 {
+                        if value == 1 {
+                            let now_grabbed = !shared.grabbed.load(Ordering::Relaxed);
+                            shared.grabbed.store(now_grabbed, Ordering::Relaxed);
+                            if let Some(a) = &audio {
+                                a.play(if now_grabbed { 1 } else { 0 }, SharedState::f32_load(&shared.volume_fp).into());
+                            }
+                            let _ = ui_tx.send(UiEvent::Grabbed);
+                            if now_grabbed { let _ = device.grab(); } else { let _ = device.ungrab(); }
+                        }
                     }
                 }
                 evdev::EventSummary::RelativeAxis(_, axis, value) => {
+                    // Always track raw movement for status display, even when not grabbed
+                    match axis {
+                        evdev::RelativeAxisCode::REL_X => {
+                            shared.display_dx.fetch_add(value, Ordering::Relaxed);
+                        }
+                        evdev::RelativeAxisCode::REL_Y => {
+                            shared.display_dy.fetch_add(value, Ordering::Relaxed);
+                        }
+                        _ => {}
+                    }
+
                     if !shared.grabbed.load(Ordering::Relaxed) { continue; }
                     let sens = SharedState::f32_load(&shared.sensitivity_fp);
                     let delta = ((value as f32) * sens / 100.0) as i32;
@@ -326,7 +336,6 @@ fn binding_listener_loop(
     shared: Arc<SharedState>,
     ui_tx: mpsc::Sender<UiEvent>,
 ) {
-    // Listen on all mouse devices for binding input
     while shared.running.load(Ordering::Relaxed) {
         if !shared.binding_mode.load(Ordering::Relaxed) {
             thread::sleep(Duration::from_millis(50));
@@ -334,10 +343,29 @@ fn binding_listener_loop(
         }
 
         let devices = list_all_mouse_devices();
-        let mut open_devices: Vec<Device> = devices
-            .iter()
-            .filter_map(|(_, path)| Device::open(path).ok())
-            .collect();
+        if devices.is_empty() {
+            thread::sleep(Duration::from_millis(500));
+            continue;
+        }
+
+        let mut open_devices: Vec<Device> = Vec::new();
+        let mut open_device_paths: Vec<PathBuf> = Vec::new();
+
+        for (_, path) in &devices {
+            match Device::open(path) {
+                Ok(dev) => {
+                    let _ = dev.set_nonblocking(true);
+                    open_devices.push(dev);
+                    open_device_paths.push(path.clone());
+                }
+                Err(_) => continue,
+            }
+        }
+
+        if open_devices.is_empty() {
+            thread::sleep(Duration::from_millis(500));
+            continue;
+        }
 
         let mut detected = false;
         while shared.running.load(Ordering::Relaxed) && shared.binding_mode.load(Ordering::Relaxed) && !detected {
@@ -360,7 +388,10 @@ fn binding_listener_loop(
             }
         }
 
-        // Small delay after detection to avoid re-triggering
+        for mut dev in open_devices.drain(..) {
+            let _ = dev.ungrab();
+        }
+
         if detected {
             thread::sleep(Duration::from_millis(200));
         }
@@ -389,13 +420,17 @@ struct AppState {
     grab_button: Arc<AtomicU32>,
     uinput: Arc<Mutex<VirtualDevice>>,
     audio: Option<Arc<AudioPlayer>>,
+    ui_tx: mpsc::Sender<UiEvent>,
     ui_rx: Arc<Mutex<mpsc::Receiver<UiEvent>>>,
-    device_switch_tx: Arc<Mutex<mpsc::Sender<PathBuf>>>,
 
     // UI widgets
     window: Option<ApplicationWindow>,
     status_label: Option<Label>,
-    axis_area: Option<DrawingArea>,
+    status_movement_label: Option<Label>,
+    x_scale: Option<Scale>,
+    y_scale: Option<Scale>,
+    x_value_label: Option<Label>,
+    y_value_label: Option<Label>,
     trigger_btn: Option<Button>,
     sensitivity_scale: Option<Scale>,
     sensitivity_entry: Option<Entry>,
@@ -423,7 +458,6 @@ impl AppState {
         let audio = AudioPlayer::new().map(Arc::new);
         let (ui_tx, ui_rx) = mpsc::channel::<UiEvent>();
         let ui_rx = Arc::new(Mutex::new(ui_rx));
-        let (device_switch_tx, device_switch_rx) = mpsc::channel::<PathBuf>();
 
         let device_path = match detect_mouse_device(&cfg.mouse_device) {
             Some(p) => p,
@@ -447,10 +481,10 @@ impl AppState {
         // Input loop thread
         let shared_input = shared.clone();
         let audio_clone = audio.clone();
-        let grab_button_input = grab_button_shared.clone();
+        let grab_button_input = Arc::clone(&grab_button_shared);
         let ui_tx_input = ui_tx.clone();
         thread::spawn(move || {
-            input_loop(device, shared_input, grab_button_input, ui_tx_input, audio_clone, device_switch_rx);
+            input_loop(device, shared_input, grab_button_input, ui_tx_input, audio_clone);
         });
 
         // Binding listener thread (listens on all devices when binding mode active)
@@ -470,14 +504,18 @@ impl AppState {
         Self {
             config: cfg_shared,
             shared,
-            grab_button: grab_button_shared,
+            grab_button: Arc::clone(&grab_button_shared),
             uinput,
             audio,
+            ui_tx,
             ui_rx,
-            device_switch_tx: Arc::new(Mutex::new(device_switch_tx)),
             window: None,
             status_label: None,
-            axis_area: None,
+            status_movement_label: None,
+            x_scale: None,
+            y_scale: None,
+            x_value_label: None,
+            y_value_label: None,
             trigger_btn: None,
             sensitivity_scale: None,
             sensitivity_entry: None,
@@ -530,7 +568,7 @@ impl AppState {
         main_box.set_margin_start(12);
         main_box.set_margin_end(12);
 
-        // Status section
+        // Status section - with movement display
         let status_frame = Frame::new(Some("Status"));
         let status_box = GtkBox::new(Orientation::Vertical, 8);
         status_box.set_margin_top(12);
@@ -546,70 +584,16 @@ impl AppState {
             .build();
         self.status_label = Some(status_label.clone());
 
-        // Axis circular display
-        let axis_area = DrawingArea::builder()
-            .content_width(160)
-            .content_height(160)
+        // Movement display - always visible (even when not grabbed)
+        let movement_label = Label::builder()
+            .label("Movement: 0 | 0")
+            .css_classes(["movement-label"])
             .halign(gtk4::Align::Center)
             .build();
-        let shared_draw = self.shared.clone();
-        axis_area.set_draw_func(move |_area, cr, width, height| {
-            let w = width as f64;
-            let h = height as f64;
-            let cx = w / 2.0;
-            let cy = h / 2.0;
-            let r = (w.min(h) / 2.0) - 12.0;
-
-            // Background circle
-            cr.set_source_rgb(0.094, 0.094, 0.145); // #181825
-            cr.arc(cx, cy, r, 0.0, 2.0 * std::f64::consts::PI);
-            cr.fill().ok();
-
-            // Border circle
-            cr.set_source_rgb(0.192, 0.196, 0.267); // #313244
-            cr.set_line_width(2.0);
-            cr.arc(cx, cy, r, 0.0, 2.0 * std::f64::consts::PI);
-            cr.stroke().ok();
-
-            // Crosshair
-            cr.set_source_rgba(0.27, 0.28, 0.35, 0.5);
-            cr.set_line_width(1.0);
-            cr.move_to(cx - r, cy);
-            cr.line_to(cx + r, cy);
-            cr.stroke().ok();
-            cr.move_to(cx, cy - r);
-            cr.line_to(cx, cy + r);
-            cr.stroke().ok();
-
-            // Get current joystick position
-            let x_val = shared_draw.pos_x.load(Ordering::Relaxed) as f64 / AXIS_MAX as f64;
-            let y_val = shared_draw.pos_y.load(Ordering::Relaxed) as f64 / AXIS_MAX as f64;
-            let dx = x_val.clamp(-1.0, 1.0) * r;
-            let dy = y_val.clamp(-1.0, 1.0) * r;
-            let px = cx + dx;
-            let py = cy + dy;
-
-            // Line from center to dot
-            cr.set_source_rgb(0.537, 0.706, 0.980); // #89b4fa blue
-            cr.set_line_width(3.0);
-            cr.move_to(cx, cy);
-            cr.line_to(px, py);
-            cr.stroke().ok();
-
-            // Dot
-            cr.set_source_rgb(0.537, 0.706, 0.980);
-            cr.arc(px, py, 8.0, 0.0, 2.0 * std::f64::consts::PI);
-            cr.fill().ok();
-
-            // Center dot
-            cr.set_source_rgb(0.8, 0.84, 0.96); // #cdd6f4
-            cr.arc(cx, cy, 3.0, 0.0, 2.0 * std::f64::consts::PI);
-            cr.fill().ok();
-        });
-        self.axis_area = Some(axis_area.clone());
+        self.status_movement_label = Some(movement_label.clone());
 
         status_box.append(&status_label);
-        status_box.append(&axis_area);
+        status_box.append(&movement_label);
         status_frame.set_child(Some(&status_box));
         main_box.append(&status_frame);
 
@@ -796,9 +780,6 @@ impl AppState {
         window.set_child(Some(&main_box));
         self.window = Some(window.clone());
 
-        // Update selected device label
-        self.update_selected_device_label();
-
         // Connect signals
         self.connect_signals(&window);
 
@@ -925,7 +906,6 @@ impl AppState {
         // Device listbox selection
         if let Some(listbox) = &self.device_listbox {
             let config = self.config.clone();
-            let device_switch_tx = self.device_switch_tx.clone();
             let selected_device_label = self.selected_device_label.clone();
             let devices = list_all_mouse_devices();
             listbox.connect_row_selected(move |_, row| {
@@ -937,8 +917,6 @@ impl AppState {
                             let mut cfg = config.lock().unwrap();
                             cfg.mouse_device = path.to_string_lossy().to_string();
                             save_config(&cfg);
-                            drop(cfg);
-                            let _ = device_switch_tx.lock().unwrap().send(path.clone());
                             if let Some(label) = &selected_device_label {
                                 label.set_label(&format!("Active device (grab/movement): {}", name));
                             }
@@ -1067,32 +1045,44 @@ impl AppState {
         if let (Some(scale), Some(entry)) = (scale, entry) {
             let config = self.config.clone();
             let shared = self.shared.clone();
+            let scale_clone = scale.clone();
             let entry_clone = entry.clone();
-            let config_set_c = config_set.clone();
-            let format_c = format.clone();
-            let shared_set_c = shared_set.clone();
-            let shared_scale = shared.clone();
 
+            let syncing = std::rc::Rc::new(std::cell::Cell::new(false));
+            let syncing_scale = syncing.clone();
+            let syncing_entry = syncing;
+
+            let config_set_s = config_set.clone();
+            let format_s = format.clone();
+            let shared_set_s = shared_set.clone();
             scale.connect_value_changed(move |s| {
+                if syncing_scale.get() { return; }
                 let val = s.value().clamp(min, max);
-                let mut cfg = config.lock().unwrap();
-                config_set_c(&mut cfg, val);
-                entry_clone.set_text(&format_c(val));
-                shared_set_c(&shared_scale, val);
+                syncing_scale.set(true);
+                {
+                    let mut cfg = config.lock().unwrap();
+                    config_set_s(&mut cfg, val);
+                }
+                entry_clone.set_text(&format_s(val));
+                shared_set_s(&shared, val);
+                syncing_scale.set(false);
             });
 
             let config2 = self.config.clone();
             let shared2 = self.shared.clone();
-            let scale_clone2 = scale.clone();
-
             entry.connect_changed(move |e| {
+                if syncing_entry.get() { return; }
                 let text = e.text().to_string();
                 if let Ok(val) = text.parse::<f64>() {
                     let clamped = val.clamp(min, max);
-                    let mut cfg = config2.lock().unwrap();
-                    config_set(&mut cfg, clamped);
-                    scale_clone2.set_value(clamped);
+                    syncing_entry.set(true);
+                    {
+                        let mut cfg = config2.lock().unwrap();
+                        config_set(&mut cfg, clamped);
+                    }
+                    scale_clone.set_value(clamped);
                     shared_set(&shared2, clamped);
+                    syncing_entry.set(false);
                 }
             });
         }
@@ -1100,7 +1090,7 @@ impl AppState {
 
     fn start_ui_updates(&self) {
         let status_label = self.status_label.clone();
-        let axis_area = self.axis_area.clone();
+        let status_movement_label = self.status_movement_label.clone();
         let trigger_btn = self.trigger_btn.clone();
         let grab_button = self.grab_button.clone();
         let shared = self.shared.clone();
@@ -1116,6 +1106,10 @@ impl AppState {
         let volume_entry = self.volume_entry.clone();
         let center_grabbed_switch = self.center_grabbed_switch.clone();
         let last_save = self.last_save.clone();
+        let x_scale = self.x_scale.clone();
+        let y_scale = self.y_scale.clone();
+        let x_value_label = self.x_value_label.clone();
+        let y_value_label = self.y_value_label.clone();
 
         glib::timeout_add_local(Duration::from_millis(16), move || {
             // Handle UI events
@@ -1135,6 +1129,12 @@ impl AppState {
                         }
                     }
                     UiEvent::Grabbed => {}
+                    UiEvent::DeviceError(msg) => {
+                        if let Some(btn) = &trigger_btn {
+                            btn.set_label(&format!("Error: {}", msg));
+                            btn.remove_css_class("binding");
+                        }
+                    }
                 }
             }
 
@@ -1147,9 +1147,26 @@ impl AppState {
                 label.add_css_class(if grabbed { "status-grabbed" } else { "status-released" });
             }
 
-            // Update axis drawing
-            if let Some(area) = &axis_area {
-                area.queue_draw();
+            // Update movement display - ALWAYS SHOW (even when not grabbed)
+            // Shows recent raw mouse movement deltas to demonstrate input is working
+            if let Some(movement_label) = &status_movement_label {
+                let dx = shared.display_dx.swap(0, Ordering::Relaxed);
+                let dy = shared.display_dy.swap(0, Ordering::Relaxed);
+                movement_label.set_label(&format!("Movement: X={} Y={}", dx, dy));
+            }
+
+            // Update X/Y scale displays
+            if let Some(x_scale) = &x_scale {
+                x_scale.set_value(shared.x.load(Ordering::Relaxed) as f64);
+            }
+            if let Some(x_label) = &x_value_label {
+                x_label.set_label(&format!("{}", shared.x.load(Ordering::Relaxed)));
+            }
+            if let Some(y_scale) = &y_scale {
+                y_scale.set_value(shared.y.load(Ordering::Relaxed) as f64);
+            }
+            if let Some(y_label) = &y_value_label {
+                y_label.set_label(&format!("{}", shared.y.load(Ordering::Relaxed)));
             }
 
             // Update UI controls from config (for import)

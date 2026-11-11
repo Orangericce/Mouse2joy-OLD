@@ -111,11 +111,11 @@ audio_volume = 0.5
 - **Modern Desktop GUI**: Native GTK4 application with blue accent theme (similar to oneclient), not a terminal interface
 - **Lightweight & Fast**: Pure Rust with efficient physics simulation and lock-free atomic state (`std::sync::atomic`)
 - **Live Settings**: Sliders with numeric input boxes (validation + clamping), toggle switches for boolean options
-- **Trigger Button Binding**: Click to enter binding mode, press any mouse button or keyboard key to assign
+- **Trigger Button Binding**: Click to enter binding mode and press any mouse button on any detected mouse device to assign (no matter which device is selected for grab/movement)
 - **Readable Button Names**: Displays "Left Click", "Right Click", "Side (Btn 4)", etc. instead of numeric codes
 - **Native File Dialogs**: Export/Import configuration using GTK4 native file choosers
-- **Device Selection**: Visual list of detected mouse devices with current selection highlighted
-- **Real-time Axis Meters**: Live X/Y (Roll/Pitch) joystick position display
+- **Device Selection**: Clear selection and display of the active mouse device used for grab/movement
+- **Live Movement Display**: Status section always shows recent mouse movement (even when not grabbed) so you can verify input is working
 - **Audio Feedback**: Sine wave audio cues (880 Hz grab, 440 Hz ungrab) powered by PulseAudio
 - **Auto-save**: Configuration auto-saves every 30 seconds and on window close
 - **Zero Sudo Needed**: Automated udev rule setup so normal desktop users can capture `/dev/uinput`

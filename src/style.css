@@ -299,6 +299,13 @@ scrollbar slider:active {
     padding: 4px 0;
 }
 
+.movement-label {
+    color: #cdd6f4;
+    font-family: "JetBrains Mono", "Fira Code", monospace;
+    font-size: 13px;
+    padding: 4px 8px;
+}
+
 .dim-label {
     color: #6c7086;
     font-size: 12px;
