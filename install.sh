@@ -53,9 +53,38 @@ install_rust() {
     fi
 }
 
-# Install PulseAudio development libraries if missing
-install_audio_deps() {
-    echo "Checking audio dependencies..."
+# Install PulseAudio and GTK4 development libraries if missing
+install_deps() {
+    echo "Checking dependencies..."
+    # Check for GTK4
+    if ! pkg-config --exists gtk4 2>/dev/null; then
+        echo -e "${YELLOW}GTK4 development headers missing, installing...${NC}"
+        if [ "$DISTRO" = "arch" ] || [ "$DISTRO" = "manjaro" ]; then
+            sudo pacman -S --needed --noconfirm gtk4
+        elif [ "$DISTRO" = "ubuntu" ] || [ "$DISTRO" = "debian" ]; then
+            sudo apt-get update && sudo apt-get install -y libgtk-4-dev
+        elif [ "$DISTRO" = "fedora" ]; then
+            sudo dnf install -y gtk4-devel
+        elif [ "$DISTRO" = "opensuse" ]; then
+            sudo zypper install -y gtk4-devel
+        fi
+    fi
+
+    # Check for libevdev
+    if ! pkg-config --exists libevdev 2>/dev/null; then
+        echo -e "${YELLOW}libevdev development headers missing, installing...${NC}"
+        if [ "$DISTRO" = "arch" ] || [ "$DISTRO" = "manjaro" ]; then
+            sudo pacman -S --needed --noconfirm libevdev
+        elif [ "$DISTRO" = "ubuntu" ] || [ "$DISTRO" = "debian" ]; then
+            sudo apt-get update && sudo apt-get install -y libevdev-dev
+        elif [ "$DISTRO" = "fedora" ]; then
+            sudo dnf install -y libevdev-devel
+        elif [ "$DISTRO" = "opensuse" ]; then
+            sudo zypper install -y libevdev-devel
+        fi
+    fi
+
+    # Check for PulseAudio
     if ! pkg-config --exists libpulse-simple 2>/dev/null; then
         echo -e "${YELLOW}PulseAudio development headers missing, installing...${NC}"
         if [ "$DISTRO" = "arch" ] || [ "$DISTRO" = "manjaro" ]; then
@@ -64,6 +93,8 @@ install_audio_deps() {
             sudo apt-get update && sudo apt-get install -y libpulse-dev
         elif [ "$DISTRO" = "fedora" ]; then
             sudo dnf install -y pulseaudio-libs-devel
+        elif [ "$DISTRO" = "opensuse" ]; then
+            sudo zypper install -y pulseaudio-devel
         fi
     fi
 }
@@ -120,10 +151,10 @@ Version=1.0
 Type=Application
 Name=mouse2joy
 GenericName=Mouse to Joystick Converter
-Comment=Convert mouse input into a virtual joystick with a terminal UI
+Comment=Convert mouse input into a virtual joystick with a modern desktop GUI
 Exec=mouse2joy
 Icon=mouse2joy
-Terminal=true
+Terminal=false
 Categories=Utility;
 Keywords=mouse;joystick;uinput;evdev;gamepad;accessibility;X-InputDevice;
 StartupNotify=false
@@ -225,7 +256,7 @@ if [ "$RUST_AVAILABLE" = false ]; then
     install_rust
 fi
 
-install_audio_deps
+install_deps
 build_app
 install_binary
 install_desktop_entry
@@ -235,7 +266,7 @@ setup_config
 echo ""
 echo -e "${GREEN}=== Installation Complete! ===${NC}"
 echo ""
-echo "mouse2joy is now installed as a standard desktop application."
+echo "mouse2joy is now installed as a modern GTK4 desktop application."
 echo ""
 echo "How to launch:"
 echo "  1. Search for 'mouse2joy' in your Linux application menu"

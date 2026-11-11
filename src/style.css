@@ -1,0 +1,297 @@
+/* mouse2joy GTK4 CSS Styling */
+/* Blue accent color scheme similar to oneclient */
+
+* {
+    font-family: "Inter", "Segoe UI", "Noto Sans", sans-serif;
+    font-size: 14px;
+}
+
+window {
+    background-color: #1e1e2e;
+    color: #cdd6f4;
+}
+
+headerbar {
+    background-color: #181825;
+    border-bottom: 1px solid #313244;
+    color: #cdd6f4;
+}
+
+headerbar.title-1 {
+    color: #89b4fa;
+    font-weight: 600;
+    font-size: 16px;
+}
+
+frame {
+    border: 1px solid #313244;
+    border-radius: 8px;
+    background-color: #1e1e2e;
+    margin-bottom: 12px;
+}
+
+frame > label {
+    color: #89b4fa;
+    font-weight: 600;
+    font-size: 13px;
+    padding: 4px 8px;
+    background-color: #181825;
+    border-radius: 4px 4px 0 0;
+}
+
+label {
+    color: #cdd6f4;
+}
+
+button {
+    background-color: #313244;
+    color: #cdd6f4;
+    border: 1px solid #45475a;
+    border-radius: 6px;
+    padding: 8px 16px;
+    transition: all 150ms ease;
+}
+
+button:hover {
+    background-color: #45475a;
+    border-color: #585b70;
+}
+
+button:active {
+    background-color: #181825;
+}
+
+button.suggested-action {
+    background-color: #89b4fa;
+    color: #1e1e2e;
+    border-color: #89b4fa;
+    font-weight: 600;
+}
+
+button.suggested-action:hover {
+    background-color: #74c7ec;
+    border-color: #74c7ec;
+}
+
+button.binding {
+    background-color: #f9e2af;
+    color: #1e1e2e;
+    border-color: #f9e2af;
+    animation: pulse 1s infinite;
+}
+
+@keyframes pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(249, 226, 175, 0.7); }
+    50% { box-shadow: 0 0 0 8px rgba(249, 226, 175, 0); }
+}
+
+scale {
+    min-height: 24px;
+}
+
+scale trough {
+    background-color: #313244;
+    border-radius: 4px;
+    border: 1px solid #45475a;
+    min-height: 8px;
+}
+
+scale highlight {
+    background-color: #89b4fa;
+    border-radius: 4px;
+}
+
+scale slider {
+    background-color: #cdd6f4;
+    border: 2px solid #89b4fa;
+    border-radius: 8px;
+    min-width: 16px;
+    min-height: 16px;
+    margin-top: -4px;
+}
+
+scale slider:hover {
+    background-color: #89b4fa;
+    box-shadow: 0 0 8px rgba(137, 180, 250, 0.5);
+}
+
+scale slider:active {
+    background-color: #74c7ec;
+    transform: scale(1.1);
+}
+
+scale marks {
+    color: #6c7086;
+    font-size: 11px;
+}
+
+scale value {
+    color: #89b4fa;
+    font-weight: 500;
+    font-size: 12px;
+}
+
+entry {
+    background-color: #181825;
+    color: #cdd6f4;
+    border: 1px solid #45475a;
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-family: "JetBrains Mono", "Fira Code", monospace;
+    font-size: 13px;
+}
+
+entry:focus {
+    border-color: #89b4fa;
+    box-shadow: 0 0 0 2px rgba(137, 180, 250, 0.2);
+}
+
+switch {
+    min-width: 52px;
+    min-height: 28px;
+}
+
+switch trough {
+    background-color: #313244;
+    border: 1px solid #45475a;
+    border-radius: 14px;
+    min-width: 52px;
+    min-height: 28px;
+}
+
+switch slider {
+    background-color: #cdd6f4;
+    border-radius: 12px;
+    min-width: 24px;
+    min-height: 24px;
+    margin: 2px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+}
+
+switch:checked trough {
+    background-color: #89b4fa;
+    border-color: #89b4fa;
+}
+
+switch:checked slider {
+    background-color: #1e1e2e;
+    margin-left: 26px;
+}
+
+switch:hover slider {
+    box-shadow: 0 2px 8px rgba(137, 180, 250, 0.4);
+}
+
+listbox {
+    background-color: #181825;
+    border: 1px solid #313244;
+    border-radius: 6px;
+}
+
+listbox row {
+    background-color: transparent;
+    border: none;
+    transition: background-color 100ms ease;
+}
+
+listbox row:hover {
+    background-color: #313244;
+}
+
+listbox row:selected {
+    background-color: #89b4fa;
+}
+
+listbox row:selected label {
+    color: #1e1e2e;
+    font-weight: 500;
+}
+
+listbox row.selected-device {
+    background-color: #313244;
+    border-left: 3px solid #89b4fa;
+}
+
+listbox row.selected-device label {
+    color: #89b4fa;
+    font-weight: 500;
+}
+
+scrolledwindow {
+    background-color: transparent;
+}
+
+scrollbar {
+    background-color: transparent;
+}
+
+scrollbar slider {
+    background-color: #45475a;
+    border-radius: 4px;
+    min-width: 8px;
+    min-height: 8px;
+    margin: 4px;
+}
+
+scrollbar slider:hover {
+    background-color: #585b70;
+}
+
+scrollbar slider:active {
+    background-color: #89b4fa;
+}
+
+.status-grabbed {
+    color: #a6e3a1;
+    font-weight: 600;
+    font-size: 14px;
+}
+
+.status-released {
+    color: #f38ba8;
+    font-weight: 600;
+    font-size: 14px;
+}
+
+dialog {
+    background-color: #1e1e2e;
+}
+
+message-dialog {
+    background-color: #1e1e2e;
+}
+
+message-dialog label {
+    color: #cdd6f4;
+}
+
+filechooser {
+    background-color: #1e1e2e;
+}
+
+filechooser listbox row:selected {
+    background-color: #89b4fa;
+}
+
+filechooser button.suggested-action {
+    background-color: #89b4fa;
+    color: #1e1e2e;
+}
+
+/* Separator styling */
+separator {
+    color: #313244;
+}
+
+/* Tooltip styling */
+tooltip {
+    background-color: #181825;
+    border: 1px solid #313244;
+    border-radius: 6px;
+    padding: 6px 10px;
+}
+
+tooltip label {
+    color: #cdd6f4;
+    font-size: 12px;
+}

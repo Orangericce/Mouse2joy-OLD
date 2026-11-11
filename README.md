@@ -1,6 +1,6 @@
 # mouse2joy - Rust Implementation
 
-**mouse2joy** rewrites the Python mouse‑to‑joystick converter in Rust for better performance, zero latency, desktop menu integration, and a modern Terminal UI (TUI).
+**mouse2joy** converts mouse input into a virtual joystick using a modern GTK4 desktop GUI. Lightweight, Linux-native, with a blue-accented interface inspired by oneclient.
 
 ---
 
@@ -8,17 +8,18 @@
 
 > **Note for Contributors & Maintainers:** This section is kept up to date every time changes are made.
 
-- [x] **Desktop Integration**: Add `.desktop` launcher and multi-resolution app icons so `mouse2joy` appears as a native application in Linux launcher menus.
-- [x] **Improved Installer**: Smart `install.sh` that configures `/dev/uinput` permissions (udev rule + `input` group), installs PulseAudio headers if missing, compiles the release binary, and sets up desktop launchers.
-- [ ] **Interactive TUI Tweak Controls**: Allow key bindings inside the Ratatui UI (`+`/`-` or `Up`/`Down`) to live-adjust sensitivity, center strength, and volume directly without manually editing `config.toml`.
-- [ ] **Unit & Integration Tests**: Add automated unit test coverage for config parsing/saving, mouse auto-detection, and virtual joystick setup.
-- [ ] **Missing Example Files**: Provide `examples/minimal.rs` and `examples/integration.rs` referenced in docs.
-- [ ] **Restore & Fix GitHub Actions CI**: Re-add `.github/workflows/rust.yml` with proper system dependencies (`libpulse-dev`, `libevdev-dev`) to ensure clean builds on PRs.
-- [ ] **Systemd User Service (Optional Background Mode)**: Add a `systemd --user` service unit for users who prefer running `mouse2joy` continuously in the background without opening a terminal window.
+- [x] **Desktop GUI Application**: Complete rewrite from Ratatui TUI to GTK4 desktop GUI with native file dialogs, sliders with input boxes, toggle switches, and trigger button binding
+- [x] **Desktop Integration**: Add `.desktop` launcher and multi-resolution app icons so `mouse2joy` appears as a native application in Linux launcher menus
+- [x] **Improved Installer**: Smart `install.sh` that configures `/dev/uinput` permissions (udev rule + `input` group), installs PulseAudio headers if missing, compiles the release binary, and sets up desktop launchers
+- [ ] **Unit & Integration Tests**: Add automated unit test coverage for config parsing/saving, mouse auto-detection, and virtual joystick setup
+- [ ] **Missing Example Files**: Provide `examples/minimal.rs` and `examples/integration.rs` referenced in docs
+- [ ] **Restore & Fix GitHub Actions CI**: Re-add `.github/workflows/rust.yml` with proper system dependencies (`libpulse-dev`, `libevdev-dev`, `libgtk-4-dev`) to ensure clean builds on PRs
+- [ ] **Systemd User Service (Optional Background Mode)**: Add a `systemd --user` service unit for users who prefer running `mouse2joy` continuously in the background
+- [ ] **Cross-Platform Support**: Extend beyond Linux to Windows/macOS (future goal)
 
 ---
 
-## Installation - Desktop & Terminal
+## Installation - Desktop Application
 
 ### Option 1: One-Command Installer (Recommended)
 
@@ -36,7 +37,7 @@ Or run locally from the source directory:
 
 **What the installer does:**
 1. Checks for Rust / `cargo` (installs via `rustup` if missing).
-2. Installs required Audio development libraries (`libpulse-dev` / `libpulse`).
+2. Installs required development libraries (`libpulse-dev` / `libpulse`, `libgtk-4-dev`, `libevdev-dev`).
 3. Compiles the release binary (`target/release/mouse2joy`).
 4. Installs the binary to `/usr/local/bin/mouse2joy`.
 5. Installs the **desktop launcher** (`mouse2joy.desktop`) and application icons (`16x16` up to `256x256` + SVG) so `mouse2joy` appears in your Linux Application Menu.
@@ -47,7 +48,7 @@ Or run locally from the source directory:
 
 ### Option 2: Manual Build (For Rust Developers)
 
-If you already have Rust and PulseAudio libraries installed:
+If you already have Rust, GTK4, and PulseAudio libraries installed:
 
 ```bash
 # Clone the repository
@@ -66,7 +67,7 @@ sudo cp resources/mouse2joy.desktop /usr/local/share/applications/
 ## Running the Application
 
 ### 1. From Desktop Application Launcher
-Search for **mouse2joy** in your Linux application launcher / GNOME Activities / KDE Application Menu / Rofi and click to open! It will launch inside a terminal window seamlessly.
+Search for **mouse2joy** in your Linux application launcher / GNOME Activities / KDE Application Menu / Rofi and click to open! It launches as a native GTK4 desktop application.
 
 ### 2. From Command Line
 ```bash
@@ -107,22 +108,44 @@ audio_volume = 0.5
 
 ## Key Features
 
-- **Standard Linux App**: Full desktop entry integration (`.desktop`) with multi-size high-res vector icon.
-- **Fast & Safe**: Pure Rust implementation with efficient physics simulation and lock‑free atomic state (`std::sync::atomic`).
-- **Terminal UI**: Real-time monitoring of X/Y axis meters, status, and audio settings via `Ratatui`.
-- **Audio Feedback**: Sine wave audio cues (880 Hz grab, 440 Hz ungrab) powered by `PulseAudio`.
-- **Zero Sudo Needed**: Automated udev rule setup so normal desktop users can capture `/dev/uinput`.
+- **Modern Desktop GUI**: Native GTK4 application with blue accent theme (similar to oneclient), not a terminal interface
+- **Lightweight & Fast**: Pure Rust with efficient physics simulation and lock-free atomic state (`std::sync::atomic`)
+- **Live Settings**: Sliders with numeric input boxes (validation + clamping), toggle switches for boolean options
+- **Trigger Button Binding**: Click to enter binding mode, press any mouse button or keyboard key to assign
+- **Readable Button Names**: Displays "Left Click", "Right Click", "Side (Btn 4)", etc. instead of numeric codes
+- **Native File Dialogs**: Export/Import configuration using GTK4 native file choosers
+- **Device Selection**: Visual list of detected mouse devices with current selection highlighted
+- **Real-time Axis Meters**: Live X/Y (Roll/Pitch) joystick position display
+- **Audio Feedback**: Sine wave audio cues (880 Hz grab, 440 Hz ungrab) powered by PulseAudio
+- **Auto-save**: Configuration auto-saves every 30 seconds and on window close
+- **Zero Sudo Needed**: Automated udev rule setup so normal desktop users can capture `/dev/uinput`
 
 ---
 
 ## Controls
 
-- **Mouse Side Button (Button 5 / BTN_SIDE)**: Toggles mouse grab on/off.
-- **`q` or `Ctrl+C`**: Gracefully quit the application and restore normal cursor operation.
+- **Configured Trigger Button** (default: Mouse Side Button / BTN_SIDE): Toggles mouse grab on/off
+- **GUI Controls**: All settings adjustable via sliders, input boxes, toggles, and buttons
+- **Window Close**: Gracefully quits the application, saves config, and restores normal cursor operation
 
 ---
 
 ## Uninstallation
+
+### Option 1: Automated Uninstaller (Recommended)
+
+Run the uninstaller script:
+```bash
+./uninstall.sh
+```
+
+This will remove:
+- Binary (`/usr/local/bin/mouse2joy`)
+- Desktop launcher and icons
+- Udev rules are kept (they don't conflict)
+- Optionally: configuration directory (`~/.config/mouse2joy`)
+
+### Option 2: Manual Removal
 
 ```bash
 # Remove binary & launchers
@@ -133,6 +156,11 @@ sudo rm -rf /usr/local/share/icons/hicolor/*/apps/mouse2joy.*
 
 # Optional: Remove config directory
 rm -rf ~/.config/mouse2joy
+```
+
+If you no longer need access to `/dev/uinput` and want to remove the `input` group membership:
+```bash
+sudo gpasswd -d $USER input
 ```
 
 ---
