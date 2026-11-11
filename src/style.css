@@ -85,6 +85,11 @@ button.binding {
     50% { box-shadow: 0 0 0 8px rgba(249, 226, 175, 0); }
 }
 
+@keyframes pulse-green {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(166, 227, 161, 0.7); }
+    50% { box-shadow: 0 0 0 10px rgba(166, 227, 161, 0); }
+}
+
 scale {
     min-height: 24px;
 }
@@ -117,7 +122,6 @@ scale slider:hover {
 
 scale slider:active {
     background-color: #74c7ec;
-    transform: scale(1.1);
 }
 
 scale marks {
@@ -182,6 +186,29 @@ switch:hover slider {
     box-shadow: 0 2px 8px rgba(137, 180, 250, 0.4);
 }
 
+/* Compact/circular-ish switch for "Center while grabbed" */
+switch.compact-switch {
+    min-width: 44px;
+    min-height: 24px;
+}
+
+switch.compact-switch trough {
+    min-width: 44px;
+    min-height: 24px;
+    border-radius: 12px;
+}
+
+switch.compact-switch slider {
+    min-width: 20px;
+    min-height: 20px;
+    border-radius: 10px;
+    margin: 2px;
+}
+
+switch.compact-switch:checked slider {
+    margin-left: 22px;
+}
+
 listbox {
     background-color: #181825;
     border: 1px solid #313244;
@@ -241,16 +268,41 @@ scrollbar slider:active {
     background-color: #89b4fa;
 }
 
+/* Status indicator - centered box with outline, no "Status:" label */
+.status-indicator {
+    font-weight: 700;
+    font-size: 16px;
+    padding: 10px 28px;
+    border-radius: 10px;
+    border: 2px solid;
+    margin-bottom: 8px;
+    min-width: 140px;
+}
+
 .status-grabbed {
-    color: #a6e3a1;
-    font-weight: 600;
-    font-size: 14px;
+    color: #1e1e2e;
+    background-color: #a6e3a1;
+    border-color: #a6e3a1;
+    animation: pulse-green 1.2s infinite;
 }
 
 .status-released {
-    color: #f38ba8;
+    color: #1e1e2e;
+    background-color: #f38ba8;
+    border-color: #f38ba8;
+}
+
+.selected-device-label {
+    color: #89b4fa;
     font-weight: 600;
-    font-size: 14px;
+    font-size: 13px;
+    padding: 4px 0;
+}
+
+.dim-label {
+    color: #6c7086;
+    font-size: 12px;
+    margin-bottom: 4px;
 }
 
 dialog {

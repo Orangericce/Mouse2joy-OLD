@@ -5,7 +5,7 @@ use gtk4::{
     Application, ApplicationWindow, Box as GtkBox, Orientation, Scale, Entry, Switch, Button,
     Label, Grid, ListBox, ListBoxRow, Frame, ScrolledWindow, HeaderBar,
     FileFilter, Adjustment, MessageDialog, DialogFlags,
-    ButtonsType, CssProvider, gio, glib,
+    ButtonsType, CssProvider, DrawingArea, gio, glib,
 };
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -114,7 +114,6 @@ fn list_all_mouse_devices() -> Vec<(String, PathBuf)> {
 enum UiEvent {
     Grabbed,
     RawButton(u16),
-    DeviceError(String),
 }
 
 struct AudioPlayer {
@@ -168,6 +167,8 @@ impl AudioPlayer {
 struct SharedState {
     x: AtomicI32,
     y: AtomicI32,
+    pos_x: AtomicI32,
+    pos_y: AtomicI32,
     grabbed: AtomicBool,
     running: AtomicBool,
     sensitivity_fp: AtomicU32,
@@ -183,6 +184,8 @@ impl SharedState {
         Self {
             x: AtomicI32::new(0),
             y: AtomicI32::new(0),
+            pos_x: AtomicI32::new(0),
+            pos_y: AtomicI32::new(0),
             grabbed: AtomicBool::new(false),
             running: AtomicBool::new(true),
             sensitivity_fp: AtomicU32::new((cfg.sensitivity as f32).to_bits()),
@@ -247,6 +250,8 @@ fn centering_loop(shared: Arc<SharedState>, uinput: Arc<Mutex<VirtualDevice>>) {
 
         let xi = x as i32;
         let yi = y as i32;
+        shared.pos_x.store(xi, Ordering::Relaxed);
+        shared.pos_y.store(yi, Ordering::Relaxed);
         if let Ok(mut ui) = uinput.lock() {
             let _ = ui.emit(&[
                 evdev::InputEvent::new_now(evdev::EventType::ABSOLUTE.0, AbsoluteAxisCode::ABS_X.0, xi),
@@ -266,8 +271,22 @@ fn input_loop(
     grab_button: Arc<AtomicU32>,
     ui_tx: mpsc::Sender<UiEvent>,
     audio: Option<Arc<AudioPlayer>>,
+    device_switch_rx: mpsc::Receiver<PathBuf>,
 ) {
-    while shared.running.load(Ordering::Relaxed) {
+    loop {
+        // Check for device switch
+        if let Ok(new_path) = device_switch_rx.try_recv() {
+            let _ = device.ungrab();
+            shared.grabbed.store(false, Ordering::Relaxed);
+            shared.pos_x.store(0, Ordering::Relaxed);
+            shared.pos_y.store(0, Ordering::Relaxed);
+            if let Ok(new_dev) = Device::open(&new_path) {
+                device = new_dev;
+            }
+        }
+
+        if !shared.running.load(Ordering::Relaxed) { break; }
+
         let events: Vec<evdev::InputEvent> = match device.fetch_events() {
             Ok(ev) => ev.collect(),
             Err(_) => { thread::sleep(Duration::from_millis(50)); continue; }
@@ -276,23 +295,14 @@ fn input_loop(
             if !shared.running.load(Ordering::Relaxed) { break; }
             match ev.destructure() {
                 evdev::EventSummary::Key(_, key_code, value) => {
-                    if shared.binding_mode.load(Ordering::Relaxed) {
-                        if value == 1 {
-                            let _ = ui_tx.send(UiEvent::RawButton(key_code.0));
+                    if value == 1 && key_code.0 == grab_button.load(Ordering::Relaxed) as u16 {
+                        let now_grabbed = !shared.grabbed.load(Ordering::Relaxed);
+                        shared.grabbed.store(now_grabbed, Ordering::Relaxed);
+                        if let Some(a) = &audio {
+                            a.play(if now_grabbed { 1 } else { 0 }, SharedState::f32_load(&shared.volume_fp).into());
                         }
-                        continue;
-                    }
-
-                    if key_code.0 == grab_button.load(Ordering::Relaxed) as u16 {
-                        if value == 1 {
-                            let now_grabbed = !shared.grabbed.load(Ordering::Relaxed);
-                            shared.grabbed.store(now_grabbed, Ordering::Relaxed);
-                            if let Some(a) = &audio {
-                                a.play(if now_grabbed { 1 } else { 0 }, SharedState::f32_load(&shared.volume_fp).into());
-                            }
-                            let _ = ui_tx.send(UiEvent::Grabbed);
-                            if now_grabbed { let _ = device.grab(); } else { let _ = device.ungrab(); }
-                        }
+                        let _ = ui_tx.send(UiEvent::Grabbed);
+                        if now_grabbed { let _ = device.grab(); } else { let _ = device.ungrab(); }
                     }
                 }
                 evdev::EventSummary::RelativeAxis(_, axis, value) => {
@@ -312,18 +322,63 @@ fn input_loop(
     let _ = device.ungrab();
 }
 
+fn binding_listener_loop(
+    shared: Arc<SharedState>,
+    ui_tx: mpsc::Sender<UiEvent>,
+) {
+    // Listen on all mouse devices for binding input
+    while shared.running.load(Ordering::Relaxed) {
+        if !shared.binding_mode.load(Ordering::Relaxed) {
+            thread::sleep(Duration::from_millis(50));
+            continue;
+        }
+
+        let devices = list_all_mouse_devices();
+        let mut open_devices: Vec<Device> = devices
+            .iter()
+            .filter_map(|(_, path)| Device::open(path).ok())
+            .collect();
+
+        let mut detected = false;
+        while shared.running.load(Ordering::Relaxed) && shared.binding_mode.load(Ordering::Relaxed) && !detected {
+            for dev in &mut open_devices {
+                if let Ok(events) = dev.fetch_events() {
+                    for ev in events {
+                        if let evdev::EventSummary::Key(_, key_code, value) = ev.destructure() {
+                            if value == 1 {
+                                let _ = ui_tx.send(UiEvent::RawButton(key_code.0));
+                                detected = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+                if detected { break; }
+            }
+            if !detected {
+                thread::sleep(Duration::from_millis(20));
+            }
+        }
+
+        // Small delay after detection to avoid re-triggering
+        if detected {
+            thread::sleep(Duration::from_millis(200));
+        }
+    }
+}
+
 fn keycode_to_name(code: u16) -> String {
     match code {
-        0x110 => "Left Click".to_string(),     // BTN_LEFT
-        0x111 => "Right Click".to_string(),    // BTN_RIGHT
-        0x112 => "Middle Click".to_string(),   // BTN_MIDDLE
-        0x113 => "Side (Btn 4)".to_string(),   // BTN_SIDE
-        0x114 => "Extra (Btn 5)".to_string(),  // BTN_EXTRA
-        0x115 => "Forward".to_string(),        // BTN_FORWARD
-        0x116 => "Back".to_string(),           // BTN_BACK
-        0x117 => "Task".to_string(),           // BTN_TASK
+        0x110 => "Left Click".to_string(),
+        0x111 => "Right Click".to_string(),
+        0x112 => "Middle Click".to_string(),
+        0x113 => "Side (Btn 4)".to_string(),
+        0x114 => "Extra (Btn 5)".to_string(),
+        0x115 => "Forward".to_string(),
+        0x116 => "Back".to_string(),
+        0x117 => "Task".to_string(),
         c if c >= 0x100 && c < 0x120 => format!("Mouse Btn {}", c - 0x100 + 1),
-        c if c >= 0x01 && c < 0x72 => format!("Key {}", c), // keyboard keys
+        c if c >= 0x01 && c < 0x72 => format!("Key {}", c),
         _ => format!("Unknown (0x{:04X})", code),
     }
 }
@@ -334,17 +389,13 @@ struct AppState {
     grab_button: Arc<AtomicU32>,
     uinput: Arc<Mutex<VirtualDevice>>,
     audio: Option<Arc<AudioPlayer>>,
-    ui_tx: mpsc::Sender<UiEvent>,
     ui_rx: Arc<Mutex<mpsc::Receiver<UiEvent>>>,
+    device_switch_tx: Arc<Mutex<mpsc::Sender<PathBuf>>>,
 
     // UI widgets
     window: Option<ApplicationWindow>,
     status_label: Option<Label>,
-    x_scale: Option<Scale>,
-    y_scale: Option<Scale>,
-    x_value_label: Option<Label>,
-    y_value_label: Option<Label>,
-
+    axis_area: Option<DrawingArea>,
     trigger_btn: Option<Button>,
     sensitivity_scale: Option<Scale>,
     sensitivity_entry: Option<Entry>,
@@ -356,10 +407,10 @@ struct AppState {
     volume_entry: Option<Entry>,
     center_grabbed_switch: Option<Switch>,
     device_listbox: Option<ListBox>,
+    selected_device_label: Option<Label>,
     export_btn: Option<Button>,
     import_btn: Option<Button>,
 
-    binding_mode: Arc<AtomicBool>,
     last_save: Arc<Mutex<Instant>>,
 }
 
@@ -372,6 +423,7 @@ impl AppState {
         let audio = AudioPlayer::new().map(Arc::new);
         let (ui_tx, ui_rx) = mpsc::channel::<UiEvent>();
         let ui_rx = Arc::new(Mutex::new(ui_rx));
+        let (device_switch_tx, device_switch_rx) = mpsc::channel::<PathBuf>();
 
         let device_path = match detect_mouse_device(&cfg.mouse_device) {
             Some(p) => p,
@@ -392,15 +444,23 @@ impl AppState {
 
         let uinput = Arc::new(create_uinput().expect("Could not create uinput device"));
 
+        // Input loop thread
         let shared_input = shared.clone();
         let audio_clone = audio.clone();
         let grab_button_input = grab_button_shared.clone();
         let ui_tx_input = ui_tx.clone();
-
         thread::spawn(move || {
-            input_loop(device, shared_input, grab_button_input, ui_tx_input, audio_clone);
+            input_loop(device, shared_input, grab_button_input, ui_tx_input, audio_clone, device_switch_rx);
         });
 
+        // Binding listener thread (listens on all devices when binding mode active)
+        let shared_bind = shared.clone();
+        let ui_tx_bind = ui_tx.clone();
+        thread::spawn(move || {
+            binding_listener_loop(shared_bind, ui_tx_bind);
+        });
+
+        // Centering thread
         let shared_center = shared.clone();
         let uinput_center = uinput.clone();
         thread::spawn(move || {
@@ -413,14 +473,11 @@ impl AppState {
             grab_button: grab_button_shared,
             uinput,
             audio,
-            ui_tx,
             ui_rx,
+            device_switch_tx: Arc::new(Mutex::new(device_switch_tx)),
             window: None,
             status_label: None,
-            x_scale: None,
-            y_scale: None,
-            x_value_label: None,
-            y_value_label: None,
+            axis_area: None,
             trigger_btn: None,
             sensitivity_scale: None,
             sensitivity_entry: None,
@@ -432,9 +489,9 @@ impl AppState {
             volume_entry: None,
             center_grabbed_switch: None,
             device_listbox: None,
+            selected_device_label: None,
             export_btn: None,
             import_btn: None,
-            binding_mode: Arc::new(AtomicBool::new(false)),
             last_save: Arc::new(Mutex::new(Instant::now())),
         }
     }
@@ -443,8 +500,8 @@ impl AppState {
         let window = ApplicationWindow::builder()
             .application(app)
             .title("mouse2joy")
-            .default_width(500)
-            .default_height(650)
+            .default_width(520)
+            .default_height(700)
             .resizable(true)
             .build();
 
@@ -480,60 +537,79 @@ impl AppState {
         status_box.set_margin_bottom(12);
         status_box.set_margin_start(12);
         status_box.set_margin_end(12);
+        status_box.set_halign(gtk4::Align::Center);
 
         let status_label = Label::builder()
-            .label("Status: RELEASED")
-            .css_classes(["status-released"])
-            .xalign(0.0)
+            .label("RELEASED")
+            .css_classes(["status-indicator", "status-released"])
+            .halign(gtk4::Align::Center)
             .build();
         self.status_label = Some(status_label.clone());
 
-        let axis_box = GtkBox::new(Orientation::Vertical, 4);
-
-        // X axis
-        let x_box = GtkBox::new(Orientation::Horizontal, 8);
-        let x_label = Label::new(Some("X (Roll):"));
-        x_label.set_width_chars(10);
-        x_label.set_xalign(0.0);
-        let x_scale = Scale::new(Orientation::Horizontal, Some(&Adjustment::new(0.0, AXIS_MIN as f64, AXIS_MAX as f64, 1.0, 100.0, 0.0)));
-        x_scale.set_draw_value(false);
-        x_scale.set_hexpand(true);
-        x_scale.set_sensitive(false);
-        let x_value_label = Label::builder()
-            .label("0")
-            .width_chars(8)
-            .xalign(1.0)
+        // Axis circular display
+        let axis_area = DrawingArea::builder()
+            .content_width(160)
+            .content_height(160)
+            .halign(gtk4::Align::Center)
             .build();
-        self.x_scale = Some(x_scale.clone());
-        self.x_value_label = Some(x_value_label.clone());
-        x_box.append(&x_label);
-        x_box.append(&x_scale);
-        x_box.append(&x_value_label);
+        let shared_draw = self.shared.clone();
+        axis_area.set_draw_func(move |_area, cr, width, height| {
+            let w = width as f64;
+            let h = height as f64;
+            let cx = w / 2.0;
+            let cy = h / 2.0;
+            let r = (w.min(h) / 2.0) - 12.0;
 
-        // Y axis
-        let y_box = GtkBox::new(Orientation::Horizontal, 8);
-        let y_label = Label::new(Some("Y (Pitch):"));
-        y_label.set_width_chars(10);
-        y_label.set_xalign(0.0);
-        let y_scale = Scale::new(Orientation::Horizontal, Some(&Adjustment::new(0.0, AXIS_MIN as f64, AXIS_MAX as f64, 1.0, 100.0, 0.0)));
-        y_scale.set_draw_value(false);
-        y_scale.set_hexpand(true);
-        y_scale.set_sensitive(false);
-        let y_value_label = Label::builder()
-            .label("0")
-            .width_chars(8)
-            .xalign(1.0)
-            .build();
-        self.y_scale = Some(y_scale.clone());
-        self.y_value_label = Some(y_value_label.clone());
-        y_box.append(&y_label);
-        y_box.append(&y_scale);
-        y_box.append(&y_value_label);
+            // Background circle
+            cr.set_source_rgb(0.094, 0.094, 0.145); // #181825
+            cr.arc(cx, cy, r, 0.0, 2.0 * std::f64::consts::PI);
+            cr.fill().ok();
 
-        axis_box.append(&x_box);
-        axis_box.append(&y_box);
+            // Border circle
+            cr.set_source_rgb(0.192, 0.196, 0.267); // #313244
+            cr.set_line_width(2.0);
+            cr.arc(cx, cy, r, 0.0, 2.0 * std::f64::consts::PI);
+            cr.stroke().ok();
+
+            // Crosshair
+            cr.set_source_rgba(0.27, 0.28, 0.35, 0.5);
+            cr.set_line_width(1.0);
+            cr.move_to(cx - r, cy);
+            cr.line_to(cx + r, cy);
+            cr.stroke().ok();
+            cr.move_to(cx, cy - r);
+            cr.line_to(cx, cy + r);
+            cr.stroke().ok();
+
+            // Get current joystick position
+            let x_val = shared_draw.pos_x.load(Ordering::Relaxed) as f64 / AXIS_MAX as f64;
+            let y_val = shared_draw.pos_y.load(Ordering::Relaxed) as f64 / AXIS_MAX as f64;
+            let dx = x_val.clamp(-1.0, 1.0) * r;
+            let dy = y_val.clamp(-1.0, 1.0) * r;
+            let px = cx + dx;
+            let py = cy + dy;
+
+            // Line from center to dot
+            cr.set_source_rgb(0.537, 0.706, 0.980); // #89b4fa blue
+            cr.set_line_width(3.0);
+            cr.move_to(cx, cy);
+            cr.line_to(px, py);
+            cr.stroke().ok();
+
+            // Dot
+            cr.set_source_rgb(0.537, 0.706, 0.980);
+            cr.arc(px, py, 8.0, 0.0, 2.0 * std::f64::consts::PI);
+            cr.fill().ok();
+
+            // Center dot
+            cr.set_source_rgb(0.8, 0.84, 0.96); // #cdd6f4
+            cr.arc(cx, cy, 3.0, 0.0, 2.0 * std::f64::consts::PI);
+            cr.fill().ok();
+        });
+        self.axis_area = Some(axis_area.clone());
+
         status_box.append(&status_label);
-        status_box.append(&axis_box);
+        status_box.append(&axis_area);
         status_frame.set_child(Some(&status_box));
         main_box.append(&status_frame);
 
@@ -643,12 +719,15 @@ impl AppState {
         settings_grid.attach(&vol_label, 0, 4, 1, 1);
         settings_grid.attach(&vol_box, 1, 4, 1, 1);
 
-        // Center while grabbed
+        // Center while grabbed - smaller switch, left aligned
         let cwg_label = Label::new(Some("Center while grabbed:"));
         cwg_label.set_xalign(0.0);
         let cwg_switch = Switch::builder()
             .active(self.config.lock().unwrap().center_while_grabbed)
+            .halign(gtk4::Align::Start)
+            .valign(gtk4::Align::Center)
             .build();
+        cwg_switch.add_css_class("compact-switch");
         self.center_grabbed_switch = Some(cwg_switch.clone());
         settings_grid.attach(&cwg_label, 0, 5, 1, 1);
         settings_grid.attach(&cwg_switch, 1, 5, 1, 1);
@@ -657,12 +736,28 @@ impl AppState {
         main_box.append(&settings_frame);
 
         // Device Selection
-        let device_frame = Frame::new(Some("Mouse Device"));
+        let device_frame = Frame::new(Some("Mouse Device (used for grab/movement)"));
         let device_box = GtkBox::new(Orientation::Vertical, 8);
         device_box.set_margin_top(12);
         device_box.set_margin_bottom(12);
         device_box.set_margin_start(12);
         device_box.set_margin_end(12);
+
+        let selected_device_label = Label::builder()
+            .label("Active device (grab/movement): detecting...")
+            .xalign(0.0)
+            .css_classes(["selected-device-label"])
+            .build();
+        self.selected_device_label = Some(selected_device_label.clone());
+        device_box.append(&selected_device_label);
+
+        let hint_label = Label::builder()
+            .label("Select which mouse is grabbed for joystick movement. Trigger button binding listens on all mouse devices.")
+            .xalign(0.0)
+            .wrap(true)
+            .css_classes(["dim-label"])
+            .build();
+        device_box.append(&hint_label);
 
         let device_listbox = ListBox::new();
         device_listbox.set_selection_mode(gtk4::SelectionMode::Single);
@@ -671,8 +766,8 @@ impl AppState {
 
         let scrolled = ScrolledWindow::builder()
             .child(&device_listbox)
-            .min_content_height(120)
-            .max_content_height(180)
+            .min_content_height(100)
+            .max_content_height(160)
             .hscrollbar_policy(gtk4::PolicyType::Never)
             .vscrollbar_policy(gtk4::PolicyType::Automatic)
             .build();
@@ -701,6 +796,9 @@ impl AppState {
         window.set_child(Some(&main_box));
         self.window = Some(window.clone());
 
+        // Update selected device label
+        self.update_selected_device_label();
+
         // Connect signals
         self.connect_signals(&window);
 
@@ -708,6 +806,22 @@ impl AppState {
         self.start_ui_updates();
 
         window.present();
+    }
+
+    fn update_selected_device_label(&self) {
+        if let Some(label) = &self.selected_device_label {
+            let cfg = self.config.lock().unwrap();
+            let devices = list_all_mouse_devices();
+            let active = devices.iter().find(|(_, p)| p.to_string_lossy() == cfg.mouse_device);
+            let text = if let Some((name, _)) = active {
+                format!("Active device (grab/movement): {}", name)
+            } else if !cfg.mouse_device.is_empty() {
+                format!("Active device (grab/movement): {}", cfg.mouse_device)
+            } else {
+                "Active device (grab/movement): (auto-detect)".to_string()
+            };
+            label.set_label(&text);
+        }
     }
 
     fn populate_device_list(&self, listbox: &ListBox) {
@@ -730,6 +844,7 @@ impl AppState {
             row.set_child(Some(&label));
             if path.to_string_lossy().to_string() == current_device {
                 row.add_css_class("selected-device");
+                listbox.select_row(Some(&row));
             }
             listbox.append(&row);
         }
@@ -738,20 +853,18 @@ impl AppState {
     fn connect_signals(&self, window: &ApplicationWindow) {
         // Trigger button
         if let Some(btn) = &self.trigger_btn {
-            let binding_mode = self.binding_mode.clone();
-            let grab_button = self.grab_button.clone();
             let shared = self.shared.clone();
+            let grab_button = self.grab_button.clone();
             let btn_clone = btn.clone();
 
             btn.connect_clicked(move |_| {
-                if binding_mode.load(Ordering::Relaxed) {
-                    binding_mode.store(false, Ordering::Relaxed);
+                if shared.binding_mode.load(Ordering::Relaxed) {
+                    shared.binding_mode.store(false, Ordering::Relaxed);
                     btn_clone.set_label(&keycode_to_name(grab_button.load(Ordering::Relaxed) as u16));
                     btn_clone.remove_css_class("binding");
                 } else {
-                    binding_mode.store(true, Ordering::Relaxed);
                     shared.binding_mode.store(true, Ordering::Relaxed);
-                    btn_clone.set_label("Press any mouse button or key...");
+                    btn_clone.set_label("Press any mouse button to bind...");
                     btn_clone.add_css_class("binding");
                 }
             });
@@ -812,14 +925,24 @@ impl AppState {
         // Device listbox selection
         if let Some(listbox) = &self.device_listbox {
             let config = self.config.clone();
+            let device_switch_tx = self.device_switch_tx.clone();
+            let selected_device_label = self.selected_device_label.clone();
             let devices = list_all_mouse_devices();
-            listbox.connect_row_activated(move |_, row| {
-                let index = row.index();
-                if index >= 0 {
-                    let idx = index as usize;
-                    if let Some((_, path)) = devices.get(idx) {
-                        let mut cfg = config.lock().unwrap();
-                        cfg.mouse_device = path.to_string_lossy().to_string();
+            listbox.connect_row_selected(move |_, row| {
+                if let Some(row) = row {
+                    let index = row.index();
+                    if index >= 0 {
+                        let idx = index as usize;
+                        if let Some((name, path)) = devices.get(idx) {
+                            let mut cfg = config.lock().unwrap();
+                            cfg.mouse_device = path.to_string_lossy().to_string();
+                            save_config(&cfg);
+                            drop(cfg);
+                            let _ = device_switch_tx.lock().unwrap().send(path.clone());
+                            if let Some(label) = &selected_device_label {
+                                label.set_label(&format!("Active device (grab/movement): {}", name));
+                            }
+                        }
                     }
                 }
             });
@@ -977,13 +1100,9 @@ impl AppState {
 
     fn start_ui_updates(&self) {
         let status_label = self.status_label.clone();
-        let x_scale = self.x_scale.clone();
-        let y_scale = self.y_scale.clone();
-        let x_value_label = self.x_value_label.clone();
-        let y_value_label = self.y_value_label.clone();
+        let axis_area = self.axis_area.clone();
         let trigger_btn = self.trigger_btn.clone();
         let grab_button = self.grab_button.clone();
-        let binding_mode = self.binding_mode.clone();
         let shared = self.shared.clone();
         let ui_rx = self.ui_rx.clone();
         let config = self.config.clone();
@@ -999,44 +1118,41 @@ impl AppState {
         let last_save = self.last_save.clone();
 
         glib::timeout_add_local(Duration::from_millis(16), move || {
-            // Handle UI events from input thread
+            // Handle UI events
             while let Ok(ev) = ui_rx.lock().unwrap().try_recv() {
                 match ev {
                     UiEvent::RawButton(code) => {
-                        if binding_mode.load(Ordering::Relaxed) {
+                        if shared.binding_mode.load(Ordering::Relaxed) {
                             let mut cfg = config.lock().unwrap();
                             cfg.grab_button = code;
                             grab_button.store(code as u32, Ordering::Relaxed);
                             shared.binding_mode.store(false, Ordering::Relaxed);
-                            binding_mode.store(false, Ordering::Relaxed);
                             if let Some(btn) = &trigger_btn {
                                 btn.set_label(&keycode_to_name(code));
                                 btn.remove_css_class("binding");
                             }
+                            save_config(&cfg);
                         }
                     }
-                    _ => {}
+                    UiEvent::Grabbed => {}
                 }
             }
 
             // Update status label
             if let Some(label) = &status_label {
                 let grabbed = shared.grabbed.load(Ordering::Relaxed);
-                label.set_label(if grabbed { "Status: GRABBED" } else { "Status: RELEASED" });
+                label.set_label(if grabbed { "GRABBED" } else { "RELEASED" });
                 label.remove_css_class("status-grabbed");
                 label.remove_css_class("status-released");
                 label.add_css_class(if grabbed { "status-grabbed" } else { "status-released" });
             }
 
-            // Update axis scales
-            let x_val = shared.x.load(Ordering::Relaxed);
-            let y_val = shared.y.load(Ordering::Relaxed);
-            if let Some(scale) = &x_scale { scale.set_value(x_val as f64); }
-            if let Some(scale) = &y_scale { scale.set_value(y_val as f64); }
-            if let Some(label) = &x_value_label { label.set_label(&x_val.to_string()); }
-            if let Some(label) = &y_value_label { label.set_label(&y_val.to_string()); }
+            // Update axis drawing
+            if let Some(area) = &axis_area {
+                area.queue_draw();
+            }
 
-            // Update UI controls from config
+            // Update UI controls from config (for import)
             let cfg = config.lock().unwrap();
             if let Some(scale) = &sensitivity_scale { if (scale.value() - cfg.sensitivity).abs() > 0.1 { scale.set_value(cfg.sensitivity); } }
             if let Some(entry) = &sensitivity_entry { if entry.text().to_string() != format!("{:.0}", cfg.sensitivity) && !entry.is_focus() { entry.set_text(&format!("{:.0}", cfg.sensitivity)); } }
@@ -1080,7 +1196,6 @@ fn main() {
     app.connect_activate(|app| {
         let mut state = AppState::new();
         state.build_ui(app);
-        // Leak state to keep it alive
         Box::leak(Box::new(state));
     });
 
