@@ -73,39 +73,65 @@ fn save_config(cfg: &Config) {
 }
 
 fn detect_mouse_device(configured: &str) -> Option<PathBuf> {
+    // First check if a specific path is configured
     if !configured.is_empty() && Path::new(configured).exists() {
         return Some(PathBuf::from(configured));
     }
-    let by_id = Path::new("/dev/input/by-id");
-    if let Ok(entries) = fs::read_dir(by_id) {
-        let mut candidates: Vec<PathBuf> = entries
-            .flatten()
-            .map(|e| e.path())
-            .filter(|p| {
-                let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                name.contains("event-mouse") || (name.contains("-event-") && name.contains("Mouse"))
-            })
-            .collect();
-        candidates.sort();
-        if let Some(p) = candidates.first() {
-            return Some(p.clone());
+
+    // Try multiple locations for mouse device detection
+    let search_locations = vec![
+        Path::new("/dev/input/by-id"),
+        Path::new("/dev/input/event"),
+        Path::new("/dev/input/"),
+    ];
+
+    for dir_path in search_locations {
+        if let Ok(entries) = fs::read_dir(dir_path) {
+            let mut candidates: Vec<PathBuf> = entries
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| {
+                    if let Some(filename) = p.file_name().and_then(|n| n.to_str()) {
+                        filename.contains("event-mouse") ||
+                        filename.contains("-event-") ||
+                        (filename.starts_with("event") && filename.chars().last().unwrap_or('0').is_ascii_digit())
+                    } else {
+                        false
+                    }
+                })
+                .collect();
+            candidates.sort();
+            if let Some(p) = candidates.first() {
+                return Some(p.clone());
+            }
         }
     }
+
     None
 }
 
 fn list_all_mouse_devices() -> Vec<(String, PathBuf)> {
     let mut devices = Vec::new();
-    let by_id = Path::new("/dev/input/by-id");
-    if let Ok(entries) = fs::read_dir(by_id) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if name.contains("event-mouse") || (name.contains("-event-") && name.contains("Mouse")) {
-                devices.push((name.to_string(), path));
+    let search_locations = vec![
+        Path::new("/dev/input/by-id"),
+        Path::new("/dev/input/event"),
+        Path::new("/dev/input/"),
+    ];
+
+    for dir_path in search_locations {
+        if let Ok(entries) = fs::read_dir(dir_path) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                if name.contains("event-mouse") ||
+                   name.contains("-event-") ||
+                   (name.starts_with("event") && name.chars().last().unwrap_or('0').is_ascii_digit()) {
+                    devices.push((name.to_string(), path));
+                }
             }
         }
     }
+
     devices.sort_by(|a, b| a.0.cmp(&b.0));
     devices
 }
@@ -473,8 +499,9 @@ impl AppState {
         let device_path = match detect_mouse_device(&cfg.mouse_device) {
             Some(p) => p,
             None => {
-                eprintln!("Could not find mouse device. Please check your config.");
-                std::process::exit(1);
+                eprintln!("No mouse device found. The application will continue running and will wait for a mouse to be connected.");
+                // Use a fallback path that will be handled in the reconnection logic
+                PathBuf::from("/dev/null")
             }
         };
 
@@ -482,20 +509,69 @@ impl AppState {
             Ok(d) => d,
             Err(e) => {
                 eprintln!("Could not open mouse device {:?}: {}", device_path, e);
-                eprintln!("Try running with sudo or check uinput permissions.");
-                std::process::exit(1);
+                eprintln!("The application will continue running and will wait for a valid mouse device.");
+                // Create a dummy device using open on /dev/null (will fail but we'll handle reconnection)
+                // Use the first available event device as fallback, or create a non-functional placeholder
+                let fallback = Device::open("/dev/null").unwrap_or_else(|_| {
+                    // Last resort: open the first event device we can find
+                    for entry in fs::read_dir("/dev/input").unwrap_or_else(|_| fs::read_dir(".").unwrap()).flatten() {
+                        if let Ok(dev) = Device::open(entry.path()) {
+                            return dev;
+                        }
+                    }
+                    // If all fails, panic - this shouldn't happen in normal circumstances
+                    panic!("No input device available for fallback");
+                });
+                fallback
             }
         };
 
         let uinput = Arc::new(create_uinput().expect("Could not create uinput device"));
 
-        // Input loop thread
+        // Input loop thread - handle device reconnection
         let shared_input = shared.clone();
         let audio_clone = audio.clone();
         let grab_button_input = Arc::clone(&grab_button_shared);
         let ui_tx_input = ui_tx.clone();
+        let initial_device_path = device_path.clone();
         thread::spawn(move || {
-            input_loop(device, shared_input, grab_button_input, ui_tx_input, audio_clone);
+            let mut current_path = initial_device_path;
+            let mut first_device: Option<Device> = Some(device);
+
+            while shared_input.running.load(Ordering::Relaxed) {
+                // Determine device to use
+                let mut active_device = if let Some(dev) = first_device.take() {
+                    Some(dev)
+                } else {
+                    // Try to detect/reopen device
+                    if let Some(new_path) = detect_mouse_device(&current_path.to_string_lossy()) {
+                        current_path = new_path.clone();
+                        Device::open(&new_path).ok().map(|mut d| {
+                            let _ = d.set_nonblocking(true);
+                            d
+                        })
+                    } else if let Some(new_path) = detect_mouse_device("") {
+                        current_path = new_path.clone();
+                        Device::open(&new_path).ok().map(|mut d| {
+                            let _ = d.set_nonblocking(true);
+                            d
+                        })
+                    } else {
+                        None
+                    }
+                };
+
+                if let Some(dev) = active_device.take() {
+                    eprintln!("Using mouse device: {:?}", current_path);
+                    // Run input loop (blocks until device errors/disconnects or running=false)
+                    input_loop(dev, shared_input.clone(), grab_button_input.clone(), ui_tx_input.clone(), audio_clone.clone());
+                }
+
+                // Device disconnected or unavailable - wait before retry
+                if shared_input.running.load(Ordering::Relaxed) {
+                    thread::sleep(Duration::from_secs(2));
+                }
+            }
         });
 
         // Binding listener thread (listens on all devices when binding mode active)
@@ -1192,7 +1268,6 @@ impl AppState {
                         }
                     }
                     UiEvent::Grabbed(_) => {}
-                    UiEvent::Grabbed(()) => {}
                 }
             }
 

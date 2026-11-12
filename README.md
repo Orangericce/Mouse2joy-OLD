@@ -11,6 +11,7 @@
 - [x] **Desktop GUI Application**: Complete rewrite from Ratatui TUI to GTK4 desktop GUI with native file dialogs, sliders with input boxes, toggle switches, and trigger button binding
 - [x] **Desktop Integration**: Add `.desktop` launcher and multi-resolution app icons so `mouse2joy` appears as a native application in Linux launcher menus
 - [x] **Improved Installer**: Smart `install.sh` that configures `/dev/uinput` permissions (udev rule + `input` group), installs PulseAudio headers if missing, compiles the release binary, and sets up desktop launchers
+- [x] **Hot-Plug Detection**: App can launch without a mouse connected and detects/reconnects when a mouse is plugged in
 - [ ] **Unit & Integration Tests**: Add automated unit test coverage for config parsing/saving, mouse auto-detection, and virtual joystick setup
 - [ ] **Missing Example Files**: Provide `examples/minimal.rs` and `examples/integration.rs` referenced in docs
 - [ ] **Restore & Fix GitHub Actions CI**: Re-add `.github/workflows/rust.yml` with proper system dependencies (`libpulse-dev`, `libevdev-dev`, `libgtk-4-dev`) to ensure clean builds on PRs
@@ -116,6 +117,7 @@ audio_volume = 0.5
 - **Native File Dialogs**: Export/Import configuration using GTK4 native file choosers
 - **Device Selection**: Clear selection and display of the active mouse device used for grab/movement
 - **Live Movement Display**: Status section always shows recent mouse movement (even when not grabbed) so you can verify input is working
+- **Hot-Plug Support**: Can start without a mouse connected and automatically detects/connects when a mouse is plugged in
 - **Audio Feedback**: Sine wave audio cues (880 Hz grab, 440 Hz ungrab) powered by PulseAudio
 - **Auto-save**: Configuration auto-saves every 30 seconds and on window close
 - **Zero Sudo Needed**: Automated udev rule setup so normal desktop users can capture `/dev/uinput`
