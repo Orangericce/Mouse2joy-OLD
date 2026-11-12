@@ -2,12 +2,10 @@
 use evdev::{AbsoluteAxisCode, Device, KeyCode, UinputAbsSetup, AttributeSet};
 use evdev::uinput::VirtualDevice;
 use gtk4::prelude::*;
-use gtk4::{
-    Application, ApplicationWindow, Box as GtkBox, Orientation, Scale, Entry, Switch, Button,
+use gtk4::{Application, ApplicationWindow, Box as GtkBox, Orientation, Scale, Entry, Switch, Button,
     Label, Grid, ListBox, ListBoxRow, Frame, ScrolledWindow, HeaderBar,
     FileFilter, Adjustment, MessageDialog, DialogFlags,
-    ButtonsType, CssProvider, gio, glib,
-};
+    ButtonsType, CssProvider, gio, glib, DrawingArea};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
@@ -17,6 +15,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use dirs;
+use toml;
 
 const AXIS_MIN: i32 = -32767;
 const AXIS_MAX: i32 = 32767;
@@ -113,9 +112,8 @@ fn list_all_mouse_devices() -> Vec<(String, PathBuf)> {
 
 #[derive(Clone, Debug)]
 enum UiEvent {
-    Grabbed,
+    Grabbed(()),
     RawButton(u16),
-    DeviceError(String),
 }
 
 struct AudioPlayer {
@@ -169,6 +167,8 @@ impl AudioPlayer {
 struct SharedState {
     x: AtomicI32,
     y: AtomicI32,
+    pos_x: AtomicI32,
+    pos_y: AtomicI32,
     display_dx: AtomicI32,
     display_dy: AtomicI32,
     grabbed: AtomicBool,
@@ -179,6 +179,7 @@ struct SharedState {
     center_while_grabbed: AtomicBool,
     volume_fp: AtomicU32,
     binding_mode: AtomicBool,
+    toggle_request: AtomicBool,
 }
 
 impl SharedState {
@@ -186,6 +187,8 @@ impl SharedState {
         Self {
             x: AtomicI32::new(0),
             y: AtomicI32::new(0),
+            pos_x: AtomicI32::new(0),
+            pos_y: AtomicI32::new(0),
             display_dx: AtomicI32::new(0),
             display_dy: AtomicI32::new(0),
             grabbed: AtomicBool::new(false),
@@ -196,6 +199,7 @@ impl SharedState {
             center_while_grabbed: AtomicBool::new(cfg.center_while_grabbed),
             volume_fp: AtomicU32::new((cfg.audio_volume as f32).to_bits()),
             binding_mode: AtomicBool::new(false),
+            toggle_request: AtomicBool::new(false),
         }
     }
 
@@ -252,6 +256,8 @@ fn centering_loop(shared: Arc<SharedState>, uinput: Arc<Mutex<VirtualDevice>>) {
 
         let xi = x as i32;
         let yi = y as i32;
+        shared.pos_x.store(xi, Ordering::Relaxed);
+        shared.pos_y.store(yi, Ordering::Relaxed);
         if let Ok(mut ui) = uinput.lock() {
             let _ = ui.emit(&[
                 evdev::InputEvent::new_now(evdev::EventType::ABSOLUTE.0, AbsoluteAxisCode::ABS_X.0, xi),
@@ -299,7 +305,7 @@ fn input_loop(
                             if let Some(a) = &audio {
                                 a.play(if now_grabbed { 1 } else { 0 }, SharedState::f32_load(&shared.volume_fp).into());
                             }
-                            let _ = ui_tx.send(UiEvent::Grabbed);
+                            let _ = ui_tx.send(UiEvent::Grabbed(()));
                             if now_grabbed { let _ = device.grab(); } else { let _ = device.ungrab(); }
                         }
                     }
@@ -517,6 +523,7 @@ impl AppState {
             window: None,
             status_label: None,
             status_movement_label: None,
+            drawing_area: None,
             x_scale: None,
             y_scale: None,
             x_value_label: None,
@@ -629,6 +636,24 @@ impl AppState {
         settings_grid.set_margin_end(12);
         settings_grid.set_row_spacing(10);
         settings_grid.set_column_spacing(12);
+
+        // Export/Import buttons
+        let io_frame = Frame::new(Some("Configuration"));
+        let io_box = GtkBox::new(Orientation::Horizontal, 12);
+        io_box.set_margin_top(12);
+        io_box.set_margin_bottom(12);
+        io_box.set_margin_start(12);
+        io_box.set_margin_end(12);
+        io_box.set_halign(gtk4::Align::Center);
+
+        let export_btn = Button::with_label("Export Config");
+        let import_btn = Button::with_label("Import Config");
+        self.export_btn = Some(export_btn.clone());
+        self.import_btn = Some(import_btn.clone());
+        io_box.append(&export_btn);
+        io_box.append(&import_btn);
+        io_frame.set_child(Some(&io_box));
+        main_box.append(&io_frame);
 
         // Trigger Button
         let trigger_label = Label::new(Some("Trigger Button:"));
@@ -1147,13 +1172,7 @@ impl AppState {
         let volume_entry = self.volume_entry.clone();
         let center_grabbed_switch = self.center_grabbed_switch.clone();
         let last_save = self.last_save.clone();
-        let x_scale = self.x_scale.clone();
-        let y_scale = self.y_scale.clone();
-        let x_value_label = self.x_value_label.clone();
-        let y_value_label = self.y_value_label.clone();
-        let status_movement_label = self.status_movement_label.clone();
-        let pos_x = shared.pos_x.clone();
-        let pos_y = shared.pos_y.clone();
+        let drawing_area = self.drawing_area.clone();
 
         glib::timeout_add_local(Duration::from_millis(16), move || {
             // Handle UI events
@@ -1172,13 +1191,8 @@ impl AppState {
                             save_config(&cfg);
                         }
                     }
-                    UiEvent::Grabbed => {}
-                    UiEvent::DeviceError(msg) => {
-                        if let Some(btn) = &trigger_btn {
-                            btn.set_label(&format!("Error: {}", msg));
-                            btn.remove_css_class("binding");
-                        }
-                    }
+                    UiEvent::Grabbed(_) => {}
+                    UiEvent::Grabbed(()) => {}
                 }
             }
 
@@ -1199,41 +1213,51 @@ impl AppState {
                 movement_label.set_label(&format!("Movement: X={} Y={}", dx, dy));
             }
 
-            // Draw circular indicator for recent movement (circle radius 50, line from center to pos_x/pos_y)
-            // Need to re-check for DrawingArea in AppState - it's still present but not used
-            if let Some(drawing_area) = &self.drawing_area {
-                let x = shared.pos_x.load(Ordering::Relaxed);
-                let y = shared.pos_y.load(Ordering::Relaxed);
-                // Drawing logic for circular indicator would go here
-                // For now, just mark as needing redraw
-                drawing_area.queue_draw();
+            // Draw circular indicator for recent movement
+            if let Some(da) = &drawing_area {
+                let _x = shared.pos_x.load(Ordering::Relaxed);
+                let _y = shared.pos_y.load(Ordering::Relaxed);
+                da.queue_draw();
             }
 
-            // Update X/Y scale displays
-            if let Some(x_scale) = &x_scale {
-                x_scale.set_value(shared.x.load(Ordering::Relaxed) as f64);
-            }
-            if let Some(x_label) = &x_value_label {
-                x_label.set_label(&format!("{}", shared.x.load(Ordering::Relaxed)));
-            }
-            if let Some(y_scale) = &y_scale {
-                y_scale.set_value(shared.y.load(Ordering::Relaxed) as f64);
-            }
-            if let Some(y_label) = &y_value_label {
-                y_label.set_label(&format!("{}", shared.y.load(Ordering::Relaxed)));
+            // Draw circular XY indicator
+            if let Some(da) = &drawing_area {
+                let _x = shared.pos_x.load(Ordering::Relaxed);
+                let _y = shared.pos_y.load(Ordering::Relaxed);
+                da.queue_draw();
             }
 
             // Update UI controls from config (for import)
             let cfg = config.lock().unwrap();
             if let Some(scale) = &sensitivity_scale { if (scale.value() - cfg.sensitivity).abs() > 0.1 { scale.set_value(cfg.sensitivity); } }
-            if let Some(entry) = &sensitivity_entry { if entry.text().to_string() != format!("{:.0}", cfg.sensitivity) && !entry.is_focus() { entry.set_text(&format!("{:.0}", cfg.sensitivity)); } }
+            if let Some(entry) = &sensitivity_entry {
+                if entry.text().to_string() != format!("{:.0}", cfg.sensitivity) && !entry.is_focus() {
+                    entry.set_text(&format!("{:.0}", cfg.sensitivity));
+                }
+            }
             if let Some(scale) = &center_x_scale { if (scale.value() - cfg.center_strength_x).abs() > 0.001 { scale.set_value(cfg.center_strength_x); } }
-            if let Some(entry) = &center_x_entry { if entry.text().to_string() != format!("{:.3}", cfg.center_strength_x) && !entry.is_focus() { entry.set_text(&format!("{:.3}", cfg.center_strength_x)); } }
+            if let Some(entry) = &center_x_entry {
+                if entry.text().to_string() != format!("{:.3}", cfg.center_strength_x) && !entry.is_focus() {
+                    entry.set_text(&format!("{:.3}", cfg.center_strength_x));
+                }
+            }
             if let Some(scale) = &center_y_scale { if (scale.value() - cfg.center_strength_y).abs() > 0.001 { scale.set_value(cfg.center_strength_y); } }
-            if let Some(entry) = &center_y_entry { if entry.text().to_string() != format!("{:.3}", cfg.center_strength_y) && !entry.is_focus() { entry.set_text(&format!("{:.3}", cfg.center_strength_y)); } }
+            if let Some(entry) = &center_y_entry {
+                if entry.text().to_string() != format!("{:.3}", cfg.center_strength_y) && !entry.is_focus() {
+                    entry.set_text(&format!("{:.3}", cfg.center_strength_y));
+                }
+            }
             if let Some(scale) = &volume_scale { if (scale.value() - cfg.audio_volume).abs() > 0.001 { scale.set_value(cfg.audio_volume); } }
-            if let Some(entry) = &volume_entry { if entry.text().to_string() != format!("{:.2}", cfg.audio_volume) && !entry.is_focus() { entry.set_text(&format!("{:.2}", cfg.audio_volume)); } }
-            if let Some(switch) = &center_grabbed_switch { if switch.is_active() != cfg.center_while_grabbed { switch.set_active(cfg.center_while_grabbed); } }
+            if let Some(entry) = &volume_entry {
+                if entry.text().to_string() != format!("{:.2}", cfg.audio_volume) && !entry.is_focus() {
+                    entry.set_text(&format!("{:.2}", cfg.audio_volume));
+                }
+            }
+            if let Some(switch) = &center_grabbed_switch {
+                if switch.is_active() != cfg.center_while_grabbed {
+                    switch.set_active(cfg.center_while_grabbed);
+                }
+            }
 
             // Auto-save
             if last_save.lock().unwrap().elapsed() > Duration::from_secs(30) {
